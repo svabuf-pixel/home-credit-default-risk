@@ -1,0 +1,43 @@
+# ── RAW DATA — never push large CSV files ──────────
+data/raw/
+data/processed/
+*.csv
+*.zip
+*.parquet
+*.feather
+
+# ── MODELS — can be large files ────────────────────
+outputs/models/
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.pth
+
+# ── PYTHON ENVIRONMENT ─────────────────────────────
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.Python
+site-packages/
+
+# ── JUPYTER CHECKPOINTS ────────────────────────────
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# ── OS GENERATED ───────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ── IDE ────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
