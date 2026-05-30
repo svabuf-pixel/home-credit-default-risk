@@ -1,0 +1,369 @@
+================================================================
+PHASE 3 - STEP 3: FEATURE TYPING, CARDINALITY & SENTINEL CODES
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Notebook: 02_eda.ipynb
+
+----------------------------------------------------------------
+1. CATEGORICAL COLUMNS - CARDINALITY & SPECIAL VALUES
+----------------------------------------------------------------
+
+NAME_CONTRACT_TYPE
+  Unique values : 2
+  Status        : Clean
+
+CODE_GENDER
+  Unique values : 3
+  Sentinel      : 'XNA' — 4 rows (~0.001%)
+  Treatment     : Replace with NaN in Phase 5
+  Note          : XNA = gender not available/applicable
+
+NAME_TYPE_SUITE
+  Unique values : 8
+  Rare categories: Other_A (866 rows, bad rate: 8.78%), Other_B (1,770 rows, bad rate = 9.83%)
+  Treatment     : Group into single 'Other' category in Phase 5
+  Note          : Both are catch-all groups, semantically similar
+
+NAME_FAMILY_STATUS
+  Unique values : 6
+  Sentinel      : 'Unknown' — 2 rows (~0.001%)
+  Treatment     : Replace with NaN in Phase 5
+
+ORGANIZATION_TYPE
+  Unique values : 58
+  Sentinel      : 'XNA' — 55,374 rows (18.01%)
+  Treatment     : Keep as valid category for WoE binning
+  Note          : XNA overlaps exactly with DAYS_EMPLOYED sentinel
+                  population — confirmed unemployed/retired applicants.
+                  Replacing with NaN would destroy predictive signal.
+
+----------------------------------------------------------------
+2. NUMERIC COLUMNS - SKEWNESS & OUTLIERS
+----------------------------------------------------------------
+
+TARGET
+  Skewness      : 3.078 (Highly skewed Right)
+  Note          : Confirms class imbalance — 8.07% bad rate
+
+EXT_SOURCE_1/2/3
+  Min           : 0.015–0.001
+  Max           : 0.963–0.855
+  Status        : Normalized
+  Treatment     : Do NOT rescale in Phase 5
+
+Building stats (_AVG/_MODE/_MEDI)
+  Min           : 0.000
+  Max           : 1.00
+  Status        : Normalized
+  Treatment     : Do NOT rescale in Phase 5
+
+
+AMT_INCOME_TOTAL
+  Skewness      : 391.560 (Highly skewed Right)
+  Max           : 117,000,000
+  99th pct      : 472,500
+  Issue         : Max is ~247x the 99th percentile — confirmed error
+  Treatment     : Winsorise at 99th percentile in Phase 5
+
+AMT_CREDIT
+  Skewness      : 1.235 (Highly skewed Right)
+  Max           : 4,050,000
+  99th pct      : 1,854,000
+  Issue         : Max is 2.2x the 99th percentile — heavy tail
+  Treatment     : Winsorise at 99th percentile in Phase 5
+
+AMT_ANNUITY
+  Skewness      : 1.580 (Highly skewed Right)
+  Max           : 258,025.500
+  99th pct      : 70,006.500
+  Issue         : Max is 3.7x the 99th percentile — heavy tail
+  Rows > 99th   : 3,070 rows (~1% of data — expected)
+  Treatment     : Winsorise at 99th percentile in Phase 5
+
+AMT_GOODS_PRICE
+  Skewness      : 1.349 (Highly skewed Right)
+  Max           : 4,050,000
+  99th pct      : 1,800,000
+  Issue         : Max is 2.25x the 99th percentile — heavy tail
+  Treatment     : Winsorise at 99th percentile in Phase 5
+
+CNT_CHILDREN
+  Skewness      : 1.975 (Highly skewed Right)
+  Max           : 19 (2 rows)
+  Issue         : Extreme but plausible in some cultures
+  Treatment     : Winsorise at 99th percentile in Phase 5
+
+CNT_FAM_MEMBERS
+  Skewness      : 0.988 (Moderately skewed Right)
+  Max           : 20 (2 rows)
+  Issue         : Extreme but plausible
+  Consistency   : CNT_CHILDREN <= CNT_FAM_MEMBERS — PASSED (0 violations)
+  Treatment     : Winsorise at 99th percentile in Phase 5
+
+OWN_CAR_AGE
+  Skewness      : 2.745 (Highly skewed Right)
+  Max           : 91
+  99th pct      : 64.0
+  Coverage      : Only 34.01% of applicants have car age recorded
+  Sentinel      : 64 — 2,443 rows (0.79% of total data)
+  Bad rate      : Sentinel (age=64): 8.60% vs Known age: 7.21%
+  Treatment     : Replace 64 with NaN + create FLAG_OWN_CAR_AGE_SENTINEL
+                  in Phase 4
+
+DAYS_BIRTH
+  Skewness      : -0.116 (Fairly symmetrical)
+  Note          : Negative by design — days before application
+  Treatment     : Convert to positive years in Phase 4
+
+DAYS_EMPLOYED
+  Skewness      : 1.664 (Highly skewed Right)
+  Note          : Negative by design — days before application
+  Sentinel      : 365,243 — 55,374 rows (18.01%)
+  Bad rate      : Sentinel population: 5.40% vs Employed: 8.66%
+  Overlap       : Exact overlap with ORGANIZATION_TYPE XNA (55,374 rows)
+  Treatment     : Replace with NaN + create FLAG_EMPLOYED_SENTINEL
+                  in Phase 4
+
+DAYS_REGISTRATION
+  Skewness      : -0.591 (Moderately skewed Left)
+  Note          : Negative by design — days before application
+  Treatment     : Convert to positive years in Phase 4
+
+DAYS_ID_PUBLISH
+  Skewness      : 0.349 (Fairly symmetrical)
+  Note          : Negative by design — days before application
+  Treatment     : Convert to positive years in Phase 4
+
+DAYS_LAST_PHONE_CHANGE
+  Skewness      : -0.714 (Moderately skewed Left)
+  Note          : Negative by design — days before application
+  Treatment     : Convert to positive days in Phase 4
+
+----------------------------------------------------------------
+3. SENTINEL CODES CATALOGUE
+----------------------------------------------------------------
+
+Column                  Sentinel     Count    % Data   Bad Rate   Treatment
+----------------------  -----------  -------  -------  ---------  --------------------------
+CODE_GENDER             XNA          4        ~0.001%  -          Replace with NaN (Phase 5)
+NAME_FAMILY_STATUS      Unknown      2        ~0.001%  -          Replace with NaN (Phase 5)
+ORGANIZATION_TYPE       XNA          55,374   18.01%   -          Keep as valid WoE bin
+DAYS_EMPLOYED           365,243      55,374   18.01%   5.40%      Replace NaN + FLAG (Phase 4)
+OWN_CAR_AGE             64           2,443    0.79%    8.60%      Replace NaN + FLAG (Phase 4)
+
+----------------------------------------------------------------
+4. OUTLIERS CATALOGUE
+----------------------------------------------------------------
+
+Column              99th Pct     Max              Treatment
+------------------  -----------  ---------------  --------------------------
+AMT_INCOME_TOTAL    472,500      117,000,000      Winsorise at 99th pct
+AMT_CREDIT          1,854,000    4,050,000        Winsorise at 99th pct
+AMT_GOODS_PRICE     1,800,000    4,050,000        Winsorise at 99th pct
+AMT_ANNUITY         70,006.5     258,025.5        Winsorise at 99th pct
+CNT_CHILDREN        -            19               Winsorise at 99th pct
+CNT_FAM_MEMBERS     -            20               Winsorise at 99th pct
+
+----------------------------------------------------------------
+5. CONSISTENCY CHECKS
+----------------------------------------------------------------
+
+Check                                    Result
+---------------------------------------  -------
+CNT_CHILDREN <= CNT_FAM_MEMBERS          PASSED — 0 violations
+DAYS_EMPLOYED sentinel == ORG_TYPE XNA   PASSED — exact overlap (55,374 rows)
+
+----------------------------------------------------------------
+6. KEY INSIGHTS FOR MODEL DEVELOPMENT
+----------------------------------------------------------------
+
+1. DAYS_EMPLOYED sentinel (18% of data) represents unemployed/retired
+   applicants with LOWER bad rate (5.40%) than employed (8.66%).
+   This is counterintuitive but explained by stable pension income.
+   FLAG_EMPLOYED_SENTINEL will be a strong predictive feature.
+
+2. OWN_CAR_AGE sentinel bad rate (8.60%) is HIGHER than known age
+   (7.21%) — unknown car age signals lower wealth and higher risk.
+   FLAG_OWN_CAR_AGE_SENTINEL should be created in Phase 4.
+
+3. ORGANIZATION_TYPE XNA and DAYS_EMPLOYED sentinel are the SAME
+   population — monitor for multicollinearity in Phase 6 VIF check.
+
+4. AMT_INCOME_TOTAL max of 117,000,000 is a confirmed data error
+   in a USD-denominated dataset where 99th pct is only 472,500.
+
+5. All DAYS_* columns are negative by design (days before application)
+   and are confirmed application-time features — NO leakage risk.
+
+================================================================
+END OF STEP 3 FINDINGS
+================================================================
+
+----------------------------------------------------------------------------------------------
+
+================================================================
+PHASE 3 - STEP 4: MISSING VALUE RATE — APPLICATION_TRAIN
+================================================================
+
+----------------------------------------------------------------
+TREATMENT TYPES LEGEND
+----------------------------------------------------------------
+Type 1 — Informative missingness    → Separate WoE missing bin
+Type 2 — Structural missingness     → Separate WoE missing bin
+Type 3 — Random/low missingness     → Median/mode imputation
+Type 4 — High missing + review      → Flag for IV screening Phase 5
+
+----------------------------------------------------------------
+1. HIGH MISSING (>40%) — BUILDING / PROPERTY STATS
+----------------------------------------------------------------
+All columns below are STRUCTURAL missingness (Type 2)
+Reason: Only populated for applicants in apartment blocks
+        where Home Credit had property data.
+        Missing = lives in house / rural / no property data.
+Treatment: Separate WoE missing bin in Phase 5
+
+Column                          Missing %
+------------------------------  ---------
+COMMONAREA_AVG/MODE/MEDI        69.87%
+NONLIVINGAPARTMENTS_AVG/MODE/MEDI 69.43%
+FONDKAPREMONT_MODE              68.39%
+LIVINGAPARTMENTS_AVG/MODE/MEDI  68.35%
+FLOORSMIN_AVG/MODE/MEDI         67.85%
+YEARS_BUILD_AVG/MODE/MEDI       66.50%
+LANDAREA_AVG/MODE/MEDI          59.38%
+BASEMENTAREA_AVG/MODE/MEDI      58.52%
+NONLIVINGAREA_AVG/MODE/MEDI     55.18%
+ELEVATORS_AVG/MODE/MEDI         53.30%
+WALLSMATERIAL_MODE              50.84%
+APARTMENTS_AVG/MODE/MEDI        50.75%
+ENTRANCES_AVG/MODE/MEDI         50.35%
+LIVINGAREA_AVG/MODE/MEDI        50.19%
+HOUSETYPE_MODE                  50.18%
+FLOORSMAX_AVG/MODE/MEDI         49.76%
+YEARS_BEGINEXPLUATATION_AVG/MODE/MEDI 48.78%
+TOTALAREA_MODE                  48.27%
+EMERGENCYSTATE_MODE             47.40%
+
+----------------------------------------------------------------
+2. HIGH MISSING — KEY PREDICTORS
+----------------------------------------------------------------
+
+EXT_SOURCE_1
+  Missing %     : 56.38%
+  Type          : 1 — Informative
+  Bad rate miss : 8.52% vs present: 7.50% (+1.02pp)
+  Reason        : Thin-file customers — no external credit history
+  Treatment     : Separate WoE missing bin in Phase 5
+  Note          : Despite high missingness keep — strong predictor
+
+EXT_SOURCE_3
+  Missing %     : 19.83%
+  Type          : 1 — Informative
+  Bad rate miss : 9.31% vs present: 7.77% (+1.54pp)
+  Reason        : Thin-file customers — no external credit history
+  Treatment     : Separate WoE missing bin in Phase 5
+
+OWN_CAR_AGE
+  Missing %     : 65.99%
+  Type          : 1 — Informative
+  Reason        : Missing = does not own a car
+  Treatment     : Separate WoE missing bin in Phase 5
+  Note          : Sentinel 64 also found — replace with NaN first
+
+OCCUPATION_TYPE
+  Missing %     : 31.35%
+  Type          : 1 — Informative
+  Reason        : Missing = unemployed / occupation not recorded
+  Treatment     : Separate WoE missing bin in Phase 5
+
+----------------------------------------------------------------
+3. MEDIUM MISSING (10–40%)
+----------------------------------------------------------------
+
+AMT_REQ_CREDIT_BUREAU_HOUR/WEEK/MON/YEAR
+  Missing %     : 13.50% each
+  Type          : 1 — Informative
+  Reason        : Missing = no credit bureau enquiries recorded
+  Treatment     : Separate WoE missing bin in Phase 5
+  Note          : Missing = no bureau activity — risk signal
+
+----------------------------------------------------------------
+4. LOW MISSING (<5%) — RANDOM MISSINGNESS
+----------------------------------------------------------------
+All columns below are Type 3 — Random/low missingness
+Treatment: Numeric → median imputation
+           Categorical → mode imputation
+
+Column                      Missing %   Type
+--------------------------  ----------  ----
+NAME_TYPE_SUITE             0.42%       Categorical → mode imputation
+DEF_60_CNT_SOCIAL_CIRCLE    0.33%       Numeric → median imputation
+OBS_60_CNT_SOCIAL_CIRCLE    0.33%       Numeric → median imputation
+DEF_30_CNT_SOCIAL_CIRCLE    0.33%       Numeric → median imputation
+OBS_30_CNT_SOCIAL_CIRCLE    0.33%       Numeric → median imputation
+EXT_SOURCE_2                0.21%       Numeric → median imputation
+AMT_GOODS_PRICE             0.09%       Numeric → median imputation
+AMT_ANNUITY                 0.004%      Numeric → median imputation
+CNT_FAM_MEMBERS             0.001%      Numeric → median imputation
+DAYS_LAST_PHONE_CHANGE      0.0003%     Numeric → median imputation
+
+----------------------------------------------------------------
+5. NO MISSING (0.00%) — COMPLETE COLUMNS
+----------------------------------------------------------------
+No treatment required.
+
+HOUR_APPR_PROCESS_START, LIVE_REGION_NOT_WORK_REGION,
+REG_REGION_NOT_LIVE_REGION, ORGANIZATION_TYPE,
+NAME_CONTRACT_TYPE, FLAG_OWN_CAR, SK_ID_CURR,
+AMT_CREDIT, AMT_INCOME_TOTAL, CNT_CHILDREN,
+NAME_INCOME_TYPE, NAME_FAMILY_STATUS, NAME_HOUSING_TYPE,
+REGION_POPULATION_RELATIVE, NAME_EDUCATION_TYPE,
+DAYS_BIRTH, DAYS_EMPLOYED, DAYS_REGISTRATION,
+DAYS_ID_PUBLISH, FLAG_MOBIL, FLAG_EMP_PHONE,
+FLAG_WORK_PHONE, FLAG_CONT_MOBILE, CODE_GENDER,
+TARGET, FLAG_OWN_REALTY, FLAG_EMAIL,
+REGION_RATING_CLIENT, REGION_RATING_CLIENT_W_CITY,
+WEEKDAY_APPR_PROCESS_START, FLAG_PHONE,
+REG_CITY_NOT_LIVE_CITY, REG_CITY_NOT_WORK_CITY
+
+----------------------------------------------------------------
+6. MISSING VALUE SUMMARY
+----------------------------------------------------------------
+
+Category                Count    Treatment
+----------------------  -------  ---------------------------
+No missing (0%)         33 cols  None required
+Low missing (<5%)       10 cols  Median/mode imputation
+Medium missing (10-40%) 5 cols   Separate WoE missing bin
+High missing (>40%)     19 cols  Separate WoE missing bin
+Key predictors missing  4 cols   Separate WoE missing bin
+
+----------------------------------------------------------------
+7. KEY DECISIONS & NOTES
+----------------------------------------------------------------
+
+1. Building stats (~50-70% missing) — DO NOT DROP based on
+   missingness alone. Let IV screening in Phase 5 decide.
+   Missing bin = "does not live in apartment block" segment.
+
+2. EXT_SOURCE_1 (56% missing) — KEEP despite high missingness.
+   Historically strongest predictor. Missing bin is informative.
+
+3. EXT_SOURCE_2 (0.21% missing) — simple median imputation.
+   Bad rate differential negligible (-0.19pp).
+
+4. OCCUPATION_TYPE (31% missing) — KEEP as valid WoE category.
+   Note: overlaps with ORGANIZATION_TYPE XNA population.
+
+5. All AMT_REQ_CREDIT_BUREAU_* missing at same rate (13.50%)
+   suggesting same population — applicants with no bureau
+   enquiry history. Treat as informative missing.
+
+6. No missing values in core application fields (income,
+   credit amount, days columns, flag columns) — confirms
+   data collection was robust for primary applicant data.
+
+================================================================
+END OF STEP 4 FINDINGS — APPLICATION_TRAIN
+================================================================
