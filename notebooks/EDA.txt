@@ -1,5 +1,5 @@
 ================================================================
-PHASE 3 - STEP 3: FEATURE TYPING, CARDINALITY & SENTINEL CODES
+PHASE 2 EDA - STEP 3: FEATURE TYPING, CARDINALITY & SENTINEL CODES
 ================================================================
 Date: 2026-05-30
 Dataset: Home Credit Default Risk
@@ -203,7 +203,7 @@ END OF STEP 3 FINDINGS
 ----------------------------------------------------------------------------------------------
 
 ================================================================
-PHASE 3 - STEP 4: MISSING VALUE RATE — APPLICATION_TRAIN
+PHASE 2 EDA - STEP 4: MISSING VALUE RATE — APPLICATION_TRAIN
 ================================================================
 
 ----------------------------------------------------------------
@@ -366,4 +366,363 @@ Key predictors missing  4 cols   Separate WoE missing bin
 
 ================================================================
 END OF STEP 4 FINDINGS — APPLICATION_TRAIN
+================================================================
+
+================================================================
+PHASE 2 - STEP 4: EDA FINDINGS — BUREAU TABLE
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: bureau (filtered to application_train SK_ID_CURR)
+Shape: 1,465,325 rows x 17 columns
+
+----------------------------------------------------------------
+1. TABLE STRUCTURE
+----------------------------------------------------------------
+Key columns (excluded from modelling):
+  SK_ID_CURR      — foreign key linking to application_train
+  SK_ID_BUREAU    — primary key for each bureau credit record
+
+Column types:
+  Numeric     : 12 columns (excluding SK_ID_* keys)
+  Categorical : 3 columns (CREDIT_ACTIVE, CREDIT_CURRENCY, CREDIT_TYPE)
+  Binary FLAG : 0 columns
+
+----------------------------------------------------------------
+2. COVERAGE ANALYSIS
+----------------------------------------------------------------
+Total train applicants          : 307,511
+Applicants with bureau records  : 263,491 (85.7%)
+Thin-file (no bureau records)   : 44,020  (14.3%)
+
+Bad rate — has bureau records   : 7.73%
+Bad rate — thin file            : 10.12%
+Difference                      : +2.39pp
+
+Interpretation:
+  Thin-file applicants default at significantly higher rates.
+  Absence of bureau history is itself a strong risk signal.
+  Missing bureau features after aggregation are INFORMATIVE,
+  not random — must be treated with separate WoE missing bins.
+
+Rows per applicant distribution:
+  Mean   : 5.56 rows
+  Median : 4 rows
+  75th   : 8 rows
+  Max    : 116 rows (SK_ID_CURR 120860 — legitimate heavy borrower)
+
+Phase 4 action:
+  → Create FLAG_NO_BUREAU_HISTORY = 1 for thin-file applicants
+
+----------------------------------------------------------------
+3. MISSING VALUE ANALYSIS
+----------------------------------------------------------------
+
+Column                   Missing %   Type          Treatment
+-----------------------  ----------  ------------  ---------------------------
+AMT_ANNUITY              77.12%      Structural    Separate WoE missing bin
+                                                   Missing = non-instalment
+                                                   credit (card/revolving)
+AMT_CREDIT_MAX_OVERDUE   64.73%      Informative   Separate WoE missing bin
+                                                   Missing = never overdue
+                                                   FLAG_EVER_OVERDUE = 0
+DAYS_ENDDATE_FACT        37.17%      Structural    Separate WoE missing bin
+                                                   Missing = credit still active
+AMT_CREDIT_SUM_LIMIT     33.42%      Structural    Separate WoE missing bin
+                                                   Missing = non-revolving credit
+AMT_CREDIT_SUM_DEBT      15.22%      Mixed         Fill with 0 where
+                                                   CREDIT_ACTIVE = Closed,
+                                                   separate bin otherwise
+DAYS_CREDIT_ENDDATE      6.08%       Random        Median imputation Phase 5
+
+----------------------------------------------------------------
+4. NUMERIC COLUMNS — SKEWNESS & OUTLIERS
+----------------------------------------------------------------
+
+DAYS_CREDIT
+  Skewness    : -0.578 (Moderately skewed Left)
+  Range       : -2,922 to 0 (negative = before application)
+  Meaning     : Days before application when bureau credit was opened
+  Note        : Convert to positive days in Phase 4
+  Treatment   : No outlier issues
+
+CREDIT_DAY_OVERDUE
+  Skewness    : 53.571 (Highly skewed Right) ← CRITICAL
+  Mean        : 0.889
+  75th pct    : 0 (vast majority have zero overdue)
+  Max         : 2,792 days (~7.6 years overdue)
+  Ever overdue: 3,706 rows (0.25% of bureau credits)
+  Bad rate    : Currently overdue = 18.21% vs not overdue = 7.79%
+  Difference  : +10.42pp ← STRONGEST SIGNAL IN BUREAU TABLE
+  Phase 4     : → Create FLAG_EVER_OVERDUE (mandatory feature)
+  Phase 5     : → Winsorise at 99th percentile
+
+DAYS_CREDIT_ENDDATE
+  Skewness    : 5.145 (Highly skewed Right)
+  Range       : -42,060 to +31,199
+  Note        : Positive = credit end date is in the future
+                Negative = credit has already ended
+  Treatment   : Convert to meaningful recency feature in Phase 4
+
+DAYS_ENDDATE_FACT
+  Skewness    : -0.795 (Moderately skewed Left)
+  Range       : -42,023 to 0
+  Note        : Negative = days before application when credit closed
+                Missing = credit still active (structural)
+  Treatment   : Convert to positive days in Phase 4
+
+AMT_CREDIT_MAX_OVERDUE
+  Skewness    : 444.725 (Highly skewed Right) ← EXTREME
+  Max         : 115,987,185 (extreme outlier)
+  75th pct    : 0 (most credits never had overdue amount)
+  Missing     : 64.73% (informative — never overdue)
+  Phase 5     : → Winsorise at 99th percentile
+  Phase 4     : → Use as aggregation input (max overdue ever)
+
+CNT_CREDIT_PROLONG
+  Skewness    : 19.108 (Highly skewed Right)
+  Mean        : 0.007, Max: 9
+  Ever prolonged: 8,820 rows (0.60%)
+  Bad rate    : Ever prolonged = 8.73% vs never = 7.81%
+  Difference  : +0.92pp (weak binary signal)
+  Decision    : Weak as binary flag — aggregate as COUNT in Phase 4
+                Let IV screening decide in Phase 5
+
+AMT_CREDIT_SUM
+  Skewness    : 66.794 (Highly skewed Right) ← EXTREME
+  Max         : 396,000,000 (extreme outlier)
+  Phase 5     : → Winsorise at 99th percentile
+  Phase 4     : → SUM per applicant = total bureau credit exposure
+
+AMT_CREDIT_SUM_DEBT
+  Skewness    : 39.420 (Highly skewed Right)
+  Min         : -4,705,600 (impossible — negative debt)
+  Negative rows: 8,418 (0.57%)
+  Max         : 170,100,000
+  Phase 5     : → Cap negative values at 0
+              : → Winsorise at 99th percentile
+
+AMT_CREDIT_SUM_LIMIT
+  Skewness    : 17.592 (Highly skewed Right)
+  Min         : -586,406 (impossible — negative limit)
+  Negative rows: 351 (0.02%)
+  Phase 5     : → Replace negative values with NaN
+              : → Winsorise at 99th percentile
+
+AMT_CREDIT_SUM_OVERDUE
+  Skewness    : 392.691 (Highly skewed Right) ← EXTREME
+  Max         : 3,756,681
+  75th pct    : 0 (most credits have no current overdue)
+  Phase 5     : → Winsorise at 99th percentile
+  Phase 4     : → SUM per applicant = total current overdue exposure
+
+DAYS_CREDIT_UPDATE
+  Skewness    : -12.285 (Highly skewed Left)
+  Max         : 372 (future update — impossible)
+  Future rows : 17 (0.001%)
+  Phase 5     : → Cap at 0 (no credit updated after application)
+
+AMT_ANNUITY
+  Skewness    : 156.204 (Highly skewed Right) ← EXTREME
+  Max         : 59,586,682 (extreme outlier)
+  Missing     : 77.12% (structural — non-instalment credits)
+  Phase 5     : → Winsorise at 99th percentile
+
+----------------------------------------------------------------
+5. CATEGORICAL COLUMNS — CARDINALITY & BAD RATES
+----------------------------------------------------------------
+
+CREDIT_ACTIVE
+  Unique values : 4
+  Missing       : 0%
+
+  Category    Count      %       Bad Rate   Interpretation
+  ----------  ---------  ------  ---------  ------------------
+  Closed      917,733    62.6%   6.93%      Fully repaid — low risk
+  Active      541,919    37.0%   9.29%      Open credit — moderate risk
+  Sold        5,653      0.4%    10.10%     Sold to debt collector
+  Bad debt    20         0.001%  20.00%     Written off — highest risk
+
+  Phase 4 actions:
+  → COUNT_BUREAU_ACTIVE      per applicant
+  → COUNT_BUREAU_CLOSED      per applicant
+  → COUNT_BUREAU_BAD_DEBT    per applicant (strong signal)
+  → COUNT_BUREAU_SOLD        per applicant
+  → FLAG_HAS_BAD_DEBT_BUREAU (mandatory — 20% bad rate)
+  → RATIO_ACTIVE_TO_TOTAL    active / total credits
+
+  Phase 5 actions:
+  → Group Sold + Bad debt into single high-risk bin for WoE
+
+---
+
+CREDIT_CURRENCY
+  Unique values : 4
+  Missing       : 0%
+
+  Category    Count      %
+  ----------  ---------  ------
+  currency 1  1,464,094  99.9%
+  currency 2  1,072      0.07%
+  currency 3  150        0.01%
+  currency 4  9          0.001%
+
+  Decision: NEAR-ZERO VARIANCE — 99.9% single value
+  Phase 5 : → Flag for zero variance screening
+            → Expected to screen out on IV
+            → Do NOT use as feature
+
+---
+
+CREDIT_TYPE
+  Unique values : 15
+  Missing       : 0%
+
+  Category                          Count      %       Bad Rate
+  --------------------------------  ---------  ------  ---------
+  Consumer credit                   1,069,610  73.0%   7.48%
+  Credit card                       343,853    23.5%   8.80%
+  Car loan                          23,757     1.6%    5.57%
+  Mortgage                          15,607     1.1%    5.00%  ← protective
+  Microloan                         9,005      0.6%    20.64% ← high risk
+  Loan for business development     1,721      0.1%    6.16%
+  Another type of loan              854        0.06%   7.14%
+  Unknown type of loan              472        0.03%   6.14%
+  Loan for working capital          377        0.03%   12.73%
+  Cash loan (non-earmarked)         23         <0.01%  4.35%
+  Real estate loan                  23         <0.01%  0.00%
+  Loan for purchase of equipment    17         <0.01%  23.53% (unreliable)
+  Loan for purchase of shares       4          <0.01%  0.00%  (unreliable)
+  Interbank credit                  1          <0.01%  0.00%  (unreliable)
+  Mobile operator loan              1          <0.01%  0.00%  (unreliable)
+
+  Key findings:
+  - Microloan: 20.64% bad rate — 2.5x population rate — STRONG SIGNAL
+  - Mortgage:  5.00% bad rate — strong PROTECTIVE signal
+  - Bottom 7 categories: too rare — group into Other in Phase 5
+  - Unknown type of loan: sentinel code — replace with NaN in Phase 5
+
+  Phase 4 actions:
+  → FLAG_HAS_MICROLOAN   (mandatory — 20.64% bad rate)
+  → FLAG_HAS_MORTGAGE    (mandatory — protective signal)
+  → FLAG_HAS_CREDIT_CARD
+  → COUNT_MICROLOANS     per applicant
+  → COUNT_MORTGAGES      per applicant
+
+  Phase 5 grouping strategy:
+  Group             Categories
+  ----------------  ------------------------------------------
+  Consumer credit   Consumer credit
+  Credit card       Credit card
+  Secured loans     Car loan, Mortgage, Real estate loan
+  Microloans        Microloan
+  Business loans    Business development, Working capital,
+                    Equipment, Cash loan
+  Other             Another type, Unknown, Shares, Interbank,
+                    Mobile operator
+
+----------------------------------------------------------------
+6. DATA QUALITY ISSUES SUMMARY
+----------------------------------------------------------------
+
+Issue                        Rows    %       Treatment (Phase 5)
+---------------------------  ------  ------  ----------------------
+AMT_CREDIT_SUM_DEBT < 0      8,418   0.57%   Cap at 0
+AMT_CREDIT_SUM_LIMIT < 0     351     0.02%   Replace with NaN
+DAYS_CREDIT_UPDATE > 0       17      0.001%  Cap at 0
+CREDIT_TYPE = Unknown        472     0.03%   Replace with NaN
+
+----------------------------------------------------------------
+7. PHASE 4 FEATURE ENGINEERING PLAN — BUREAU TABLE
+----------------------------------------------------------------
+All features aggregated to SK_ID_CURR grain
+
+A. Coverage & volume features
+   FLAG_NO_BUREAU_HISTORY      — 1 if no bureau records (thin-file)
+   COUNT_BUREAU_TOTAL          — total number of bureau credits
+   COUNT_BUREAU_ACTIVE         — number of active credits
+   COUNT_BUREAU_CLOSED         — number of closed credits
+   COUNT_BUREAU_BAD_DEBT       — number of bad debt credits
+   COUNT_BUREAU_SOLD           — number of sold credits
+   RATIO_ACTIVE_TO_TOTAL       — active / total credits
+
+B. Risk flags (mandatory)
+   FLAG_HAS_BAD_DEBT_BUREAU    — any bad debt credit ever
+   FLAG_EVER_OVERDUE           — any credit day overdue > 0
+   FLAG_HAS_MICROLOAN          — any microloan in bureau
+   FLAG_HAS_MORTGAGE           — any mortgage in bureau
+   FLAG_HAS_CREDIT_CARD        — any credit card in bureau
+
+C. Overdue & delinquency features
+   MAX_CREDIT_DAY_OVERDUE      — max days overdue across all credits
+   SUM_CREDIT_DAY_OVERDUE      — total days overdue
+   MAX_AMT_CREDIT_MAX_OVERDUE  — max overdue amount ever
+   SUM_AMT_CREDIT_SUM_OVERDUE  — total current overdue amount
+
+D. Credit exposure features
+   SUM_AMT_CREDIT_SUM          — total bureau credit exposure
+   SUM_AMT_CREDIT_SUM_DEBT     — total outstanding debt
+   MEAN_AMT_CREDIT_SUM_DEBT    — average outstanding debt per credit
+   DEBT_TO_CREDIT_RATIO        — total debt / total credit sum
+
+E. Recency features
+   DAYS_SINCE_LAST_CREDIT      — most recent bureau credit
+   DAYS_SINCE_FIRST_CREDIT     — oldest bureau credit (credit age)
+   COUNT_CREDITS_LAST_12M      — credits opened in last 12 months
+   COUNT_CREDITS_LAST_24M      — credits opened in last 24 months
+
+F. Credit prolongation
+   COUNT_CREDIT_PROLONG        — total prolongations across all credits
+
+----------------------------------------------------------------
+8. PHASE 5 TREATMENT SUMMARY
+----------------------------------------------------------------
+
+Action                    Columns
+------------------------  ------------------------------------
+Winsorise at 99th pct     AMT_CREDIT_MAX_OVERDUE,
+                          AMT_CREDIT_SUM, AMT_CREDIT_SUM_DEBT,
+                          AMT_CREDIT_SUM_OVERDUE, AMT_ANNUITY,
+                          CREDIT_DAY_OVERDUE
+Cap at 0                  AMT_CREDIT_SUM_DEBT (negatives),
+                          DAYS_CREDIT_UPDATE (positives)
+Replace with NaN          AMT_CREDIT_SUM_LIMIT (negatives),
+                          CREDIT_TYPE = Unknown
+Separate WoE missing bin  AMT_ANNUITY, AMT_CREDIT_MAX_OVERDUE,
+                          DAYS_ENDDATE_FACT, AMT_CREDIT_SUM_LIMIT,
+                          AMT_CREDIT_SUM_DEBT
+Median imputation         DAYS_CREDIT_ENDDATE
+Zero variance — drop      CREDIT_CURRENCY (review IV in Phase 5)
+Group rare categories     CREDIT_TYPE bottom 7 → Other
+                          CREDIT_ACTIVE: Sold+Bad debt → High Risk
+
+----------------------------------------------------------------
+9. KEY INSIGHTS FOR MODEL DEVELOPMENT
+----------------------------------------------------------------
+
+1. CREDIT_DAY_OVERDUE is the strongest signal in bureau table —
+   18.21% bad rate when overdue vs 7.79% when not (+10.42pp).
+   FLAG_EVER_OVERDUE is a mandatory Phase 4 feature.
+
+2. CREDIT_ACTIVE = Bad debt has 20% bad rate — 2.5x population.
+   FLAG_HAS_BAD_DEBT_BUREAU is a mandatory Phase 4 feature.
+
+3. Microloan credit type has 20.64% bad rate — signals financial
+   stress and limited access to mainstream credit.
+
+4. Mortgage has 5% bad rate — strongest protective signal in bureau.
+   Property ownership and long-term credit stability.
+
+5. Thin-file applicants (14.3%) have 10.12% bad rate vs 7.73%
+   for applicants with bureau history (+2.39pp).
+   FLAG_NO_BUREAU_HISTORY is a mandatory Phase 4 feature.
+
+6. CREDIT_CURRENCY is near-zero variance (99.9% currency 1) —
+   expected to screen out on IV in Phase 5.
+
+7. AMT_CREDIT_MAX_OVERDUE missing (64.73%) is INFORMATIVE —
+   missing means never overdue. Do NOT impute with mean/median.
+
+================================================================
+END OF BUREAU EDA FINDINGS
 ================================================================
