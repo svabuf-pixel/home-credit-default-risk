@@ -726,3 +726,659 @@ Group rare categories     CREDIT_TYPE bottom 7 → Other
 ================================================================
 END OF BUREAU EDA FINDINGS
 ================================================================
+
+================================================================
+PHASE 2 - STEP 4: EDA FINDINGS — BUREAU_BALANCE TABLE
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: bureau_balance (filtered via bureau → application_train)
+Shape: 14,701,612 rows x 3 columns
+
+Filter logic:
+  bureau_balance.SK_ID_BUREAU IN (
+      SELECT SK_ID_BUREAU FROM bureau
+      WHERE SK_ID_CURR IN (SELECT SK_ID_CURR FROM application_train)
+  )
+
+----------------------------------------------------------------
+1. TABLE STRUCTURE
+----------------------------------------------------------------
+Columns:
+  SK_ID_BUREAU    — foreign key linking to bureau (exclude from modelling)
+  MONTHS_BALANCE  — monthly grain (negative = months before application)
+  STATUS          — monthly credit status (key risk variable)
+
+Column types:
+  Numeric     : 1 column (MONTHS_BALANCE — SK_ID_BUREAU excluded as key)
+  Categorical : 1 column (STATUS)
+  Binary FLAG : 0 columns
+
+Missing values: NONE — table is fully complete
+
+----------------------------------------------------------------
+2. COVERAGE ANALYSIS
+----------------------------------------------------------------
+
+Bureau credit level:
+  Unique SK_ID_BUREAU in bureau_balance : 523,515
+  Unique SK_ID_BUREAU in bureau         : 1,465,325
+  Coverage                              : 35.7%
+  Credits without balance history       : 64.3%
+
+Applicant level:
+  Applicants with balance history       : 92,231  (30.0%)
+  Applicants without balance history    : 215,280 (70.0%)
+  Bad rate — with balance history       : 8.14%
+  Bad rate — without balance history    : 8.04%
+  Difference                            : +0.10pp (negligible)
+
+Coverage by credit type (with vs without balance history):
+  Distributions are almost IDENTICAL between groups:
+  Consumer credit ~73%, Credit card ~23%, Car loan ~1.6%
+  → Missing balance history is NOT structural by credit type
+  → Likely due to lender reporting practices or older credits
+
+Decision:
+  Missing bureau_balance features are NOT informative (0.10pp diff)
+  → DO NOT create FLAG_NO_BUREAU_BALANCE
+  → Impute missing aggregated features with 0 after Phase 4
+  → Exception: recency features (MAX_DPD_LAST_12M) → impute with 0
+
+----------------------------------------------------------------
+3. MONTHS_BALANCE ANALYSIS
+----------------------------------------------------------------
+Range       : -96 to 0 (negative = months before application)
+Mean        : -28.6 months (~2.4 years back)
+Median      : -24 months (2 years back)
+History depth: 96 months (8 years)
+
+Months per bureau credit:
+  Count  : 523,515 unique credits
+  Mean   : 28 months (~2.3 years)
+  Median : 22 months
+  75th   : 40 months
+  Max    : 97 months (~8 years)
+
+Recency windows for Phase 4:
+  LAST_3M   : MONTHS_BALANCE >= -3   (last quarter)
+  LAST_6M   : MONTHS_BALANCE >= -6   (last half year)
+  LAST_12M  : MONTHS_BALANCE >= -12  (last year — most predictive)
+  LAST_24M  : MONTHS_BALANCE >= -24  (last 2 years)
+
+----------------------------------------------------------------
+4. STATUS COLUMN — KEY RISK VARIABLE
+----------------------------------------------------------------
+Status mapping:
+  0 = No DPD — paid on time
+  1 = 1-30 days past due
+  2 = 31-60 days past due
+  3 = 61-90 days past due
+  4 = 91-120 days past due
+  5 = 120+ DPD or sold or written off
+  C = Closed — credit fully repaid
+  X = Unknown status
+
+Distribution:
+  Status   Count        %       Bad Rate   vs Population
+  ------   ----------   ------  ---------  -------------
+  C        7,027,575    47.8%   6.39%      -1.68pp (protective)
+  0        4,615,684    31.4%   7.59%      -0.48pp (slightly protective)
+  X        2,837,039    19.3%   6.96%      -1.11pp (lower risk)
+  1        155,330       1.1%   10.24%     +2.17pp
+  5        40,528        0.3%   11.39%     +3.32pp
+  2        15,583        0.1%   10.40%     +2.33pp
+  3        5,976        <0.1%   11.33%     +3.26pp
+  4        3,897        <0.1%   11.98%     +3.91pp (highest risk)
+
+Key findings:
+
+1. PERFECT MONOTONIC RISK ORDERING (1→2→3→4→5)
+   Bad rate increases consistently with DPD severity.
+   Clean monotonic relationship → ideal for WoE binning.
+
+2. STATUS X — LOWER RISK THAN POPULATION (6.96%)
+   Unknown status is NOT a high-risk signal.
+   Likely assigned to inactive or no-activity credits.
+   Treatment: Keep as own WoE bin — DO NOT group with delinquency.
+
+3. EVEN STATUS 1 IS PREDICTIVE (+2.17pp)
+   Early delinquency (1-30 DPD) meaningfully elevates default risk.
+   Any DPD history should be captured in feature engineering.
+
+4. STATUS C AND 0 ARE PROTECTIVE
+   Closed and on-time records signal good repayment behaviour.
+
+Phase 5 WoE binning strategy:
+  Bin 1 : C, 0    (good standing)
+  Bin 2 : X       (unknown — own bin)
+  Bin 3 : 1       (early delinquency)
+  Bin 4 : 2, 3    (moderate delinquency)
+  Bin 5 : 4, 5    (serious delinquency / default)
+
+----------------------------------------------------------------
+5. PHASE 4 FEATURE ENGINEERING PLAN — BUREAU_BALANCE TABLE
+----------------------------------------------------------------
+Aggregation grain: SK_ID_BUREAU first → then SK_ID_CURR
+
+Note: STATUS must be encoded numerically for aggregation:
+  C → 0, X → 0, 0 → 0, 1 → 1, 2 → 2, 3 → 3, 4 → 4, 5 → 5
+
+A. Ever delinquent flags (per SK_ID_BUREAU → max to SK_ID_CURR)
+   FLAG_EVER_DPD_30      — any STATUS 1,2,3,4,5
+   FLAG_EVER_DPD_60      — any STATUS 2,3,4,5
+   FLAG_EVER_DPD_90      — any STATUS 3,4,5
+   FLAG_EVER_DPD_120     — any STATUS 4,5 (mandatory)
+
+B. Count features (per SK_ID_BUREAU → sum to SK_ID_CURR)
+   COUNT_MONTHS_DPD_30   — months with STATUS 1+
+   COUNT_MONTHS_DPD_60   — months with STATUS 2+
+   COUNT_MONTHS_DPD_90   — months with STATUS 3+
+   MAX_DPD_STATUS        — worst STATUS ever (numeric 0-5)
+
+C. Recency features — last 3/6/12/24 months
+   MAX_DPD_LAST_3M       — worst STATUS in last 3 months
+   MAX_DPD_LAST_6M       — worst STATUS in last 6 months
+   MAX_DPD_LAST_12M      — worst STATUS in last 12 months
+   COUNT_DPD_LAST_12M    — delinquent months in last 12 months
+   MAX_DPD_LAST_24M      — worst STATUS in last 24 months
+
+D. Trend features
+   IS_DETERIORATING      — recent STATUS worse than historical avg
+   IS_IMPROVING          — recent STATUS better than historical avg
+
+E. Closed credit features
+   COUNT_MONTHS_CLOSED   — months with STATUS C
+   RATIO_GOOD_MONTHS     — (C + 0) months / total months
+
+----------------------------------------------------------------
+6. MISSING VALUE TREATMENT AFTER AGGREGATION
+----------------------------------------------------------------
+After Phase 4 aggregation to SK_ID_CURR grain:
+
+  Feature type              Missing means        Treatment
+  ------------------------  -------------------  ------------------
+  FLAG_EVER_DPD_*           No balance history   Impute with 0
+  COUNT_MONTHS_DPD_*        No balance history   Impute with 0
+  MAX_DPD_*                 No balance history   Impute with 0
+  COUNT_DPD_LAST_12M        No balance history   Impute with 0
+  IS_DETERIORATING          No balance history   Impute with 0
+  RATIO_GOOD_MONTHS         No balance history   Impute with 0
+
+Reason: Missing = no balance history reported, NOT = high risk.
+        Bad rate differential is negligible (0.10pp).
+        Imputing with 0 is correct — no delinquency recorded.
+
+----------------------------------------------------------------
+7. KEY INSIGHTS FOR MODEL DEVELOPMENT
+----------------------------------------------------------------
+
+1. STATUS 4 has highest bad rate (11.98%) — 91-120 DPD applicants
+   are nearly 1.5x more likely to default than population.
+   FLAG_EVER_DPD_120 is a mandatory Phase 4 feature.
+
+2. Perfect monotonic ordering (1→5) confirms STATUS is a clean
+   ordinal risk variable — ideal for WoE binning with natural
+   bin boundaries at each DPD threshold.
+
+3. STATUS X (19.3% of records) has LOWER bad rate (6.96%) than
+   population. Keep as separate WoE bin — do NOT group with
+   delinquency categories.
+
+4. History depth of 96 months allows meaningful recency analysis.
+   Last 12 months is the most predictive window per recency
+   principle — recent behaviour outweighs distant history.
+
+5. Missing balance history (70% of applicants) is NOT informative
+   (0.10pp bad rate differential). Safe to impute with 0.
+   No FLAG_NO_BUREAU_BALANCE needed.
+
+6. Two-level aggregation required in Phase 4:
+   bureau_balance → SK_ID_BUREAU grain → bureau grain
+   → SK_ID_CURR grain → merge onto application_train
+
+================================================================
+END OF BUREAU_BALANCE EDA FINDINGS
+================================================================
+
+
+================================================================
+PHASE 2 - STEP 4: EDA FINDINGS — PREVIOUS_APPLICATION TABLE
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: previous_application (filtered to application_train SK_ID_CURR)
+Shape: 1,413,701 rows x 37 columns
+After deduplication (FLAG_LAST_APPL_PER_CONTRACT = Y): 1,406,387 rows
+
+Filter logic:
+  WHERE SK_ID_CURR IN (SELECT SK_ID_CURR FROM application_train)
+
+----------------------------------------------------------------
+1. TABLE STRUCTURE
+----------------------------------------------------------------
+Key columns (excluded from modelling):
+  SK_ID_CURR   — foreign key linking to application_train
+  SK_ID_PREV   — primary key for each previous application
+
+Column types:
+  Numeric     : 19 columns (excluding SK_ID_* keys)
+  Categorical : 15 columns
+  Binary FLAG : 1 column (FLAG_LAST_APPL_PER_CONTRACT)
+
+----------------------------------------------------------------
+2. DEDUPLICATION
+----------------------------------------------------------------
+FLAG_LAST_APPL_PER_CONTRACT:
+  Y (keep)  : 1,406,387 rows
+  N (remove): 7,314 rows (0.52%)
+
+Reason: Some contracts have multiple applications due to
+        client/clerk errors. Keep only last application
+        per contract to avoid double counting in Phase 4.
+
+Action: Filter to FLAG_LAST_APPL_PER_CONTRACT = 'Y'
+        before ALL aggregations in Phase 4.
+
+----------------------------------------------------------------
+3. COVERAGE ANALYSIS
+----------------------------------------------------------------
+Total train applicants              : 307,511
+Applicants with previous records    : 291,057 (94.6%)
+First-time applicants (no records)  : 16,454  (5.4%)
+
+Bad rate — has previous records     : 8.19%
+Bad rate — first-time applicants    : 5.96%
+Difference                          : -2.24pp
+
+Interpretation:
+  First-time applicants have LOWER bad rate than those with
+  previous applications. This is opposite to bureau finding.
+  First-time applicants are carefully screened by Home Credit.
+  Previous applicants include refused/defaulted history.
+
+Phase 4 action:
+  → FLAG_NO_PREV_APPLICATION = 1 for first-time applicants
+  Note: Protective signal here, not risk signal.
+
+Rows per applicant:
+  Mean   : ~4.8 rows
+  Coverage: 94.6% of applicants have at least one record
+
+----------------------------------------------------------------
+4. MISSING VALUE ANALYSIS
+----------------------------------------------------------------
+
+Column                      Missing %   Type          Treatment
+--------------------------  ----------  ------------  ---------------------------
+RATE_INTEREST_PRIVILEGED    99.66%      High missing  Flag for IV screening
+                                                      Expected to drop in Phase 5
+RATE_INTEREST_PRIMARY       99.66%      High missing  Flag for IV screening
+                                                      Expected to drop in Phase 5
+AMT_DOWN_PAYMENT            53.02%      Structural    Separate WoE missing bin
+                                                      Missing = no down payment
+RATE_DOWN_PAYMENT           53.02%      Structural    Separate WoE missing bin
+NAME_TYPE_SUITE             48.99%      Informative   Separate WoE missing bin
+DAYS_TERMINATION            39.69%      Structural    Separate WoE missing bin
+DAYS_FIRST_DRAWING          39.69%      Structural    Replace with NaN
+DAYS_FIRST_DUE              39.69%      Structural    Separate WoE missing bin
+DAYS_LAST_DUE_1ST_VERSION   39.69%      Structural    Separate WoE missing bin
+DAYS_LAST_DUE               39.69%      Structural    Separate WoE missing bin
+NFLAG_INSURED_ON_APPROVAL   39.69%      Structural    Separate WoE missing bin
+AMT_GOODS_PRICE             22.60%      Structural    Separate WoE missing bin
+AMT_ANNUITY                 21.73%      Structural    Separate WoE missing bin
+CNT_PAYMENT                 21.73%      Structural    Separate WoE missing bin
+PRODUCT_COMBINATION          0.02%      Random        Mode imputation Phase 5
+AMT_CREDIT                   0.00%      Complete      None (zeros = sentinel)
+
+Note: DAYS_* missing 39.69% = same 561,106 rows = structural
+      These fields only apply to approved/disbursed loans.
+      Missing = refused, canceled, or unused offer.
+
+----------------------------------------------------------------
+5. CATEGORICAL COLUMNS — BAD RATE ANALYSIS
+----------------------------------------------------------------
+
+NAME_CONTRACT_STATUS (most important column)
+  Category       Count      %       Bad Rate   vs Pop
+  -----------    ---------  ------  ---------  --------
+  Refused        238,078    16.93%  12.03%     +3.39pp
+  Canceled       259,439    18.45%   9.17%     +0.53pp
+  Unused offer    22,771     1.62%   8.25%     -0.39pp
+  Approved       886,099    63.01%   7.59%     -1.05pp
+
+  Phase 4 mandatory features:
+  → FLAG_EVER_REFUSED          (strong signal +3.39pp)
+  → COUNT_PREV_REFUSED
+  → COUNT_PREV_APPROVED
+  → COUNT_PREV_CANCELED
+  → REFUSAL_RATE = refused / total
+
+---
+
+NAME_CONTRACT_TYPE
+  XNA              313    0.02%  20.13%  sentinel — replace NaN
+  Revolving loans  154,058  10.95%  10.45%  highest risk
+  Cash loans       626,760  44.57%   9.13%  moderate risk
+  Consumer loans   625,256  44.46%   7.71%  lowest risk — protective
+
+  Phase 4: FLAG_REVOLVING_LOAN (mandatory)
+
+---
+
+CODE_REJECT_REASON
+  Code    Count      %       Bad Rate   Interpretation
+  ------  ---------  ------  ---------  ---------------------
+  SCOFR   10,429     0.74%   21.10%     Fraud detection — CRITICAL
+  LIMIT   47,158     3.35%   12.60%     Credit limit exceeded
+  HC      141,580   10.07%   11.73%     High credit risk score
+  XNA     3,415      0.24%   10.95%     Unknown reason
+  SCO     32,326     2.30%    9.97%     General score rejection
+  SYSTEM  186        0.01%    9.68%     System rejection
+  VERIF   2,992      0.21%    9.22%     Verification failure
+  CLIENT  22,771     1.62%    8.25%     Client-initiated
+  XAP     1,145,530 81.45%    7.95%     Not applicable
+
+  Phase 4 mandatory features:
+  → FLAG_REJECTED_SCOFR (fraud — 21.10% bad rate)
+  → FLAG_REJECTED_LIMIT
+  → FLAG_REJECTED_HC
+  → COUNT_REJECTIONS_TOTAL
+
+---
+
+NAME_CLIENT_TYPE
+  XNA        1,541    0.11%   9.93%   sentinel — replace NaN
+  New        259,523  18.45%  9.00%   first-time — slightly elevated
+  Repeater   1,030,971 73.31% 8.70%  returning customer
+  Refreshed  114,352   8.13%  7.31%  lapsed then returned — protective
+
+  Phase 4: FLAG_EVER_REFRESHED (protective signal)
+
+---
+
+NAME_CASH_LOAN_PURPOSE
+  Key findings (ignoring XAP/XNA sentinels):
+  Refusal to name goal    23.08%  — hiding purpose — CRITICAL FLAG
+  Hobby                   20.00%  — discretionary — high risk
+  Car repairs             18.38%  — emergency/stress
+  Payments on other loans 16.02%  — debt spiral signal
+  Buying a garage          6.03%  — asset acquisition — protective
+
+  Phase 4:
+  → FLAG_PURPOSE_REFUSED_TO_NAME (mandatory — 23.08%)
+  → FLAG_PURPOSE_DEBT_RELATED    (payments/repairs/urgent)
+  → FLAG_PURPOSE_ASSET           (garage/home/new car)
+
+---
+
+NAME_PRODUCT_TYPE
+  walk-in   128,242   9.12%  12.47%  unplanned borrowing — HIGH RISK
+  XNA       900,049  64.00%   8.35%  sentinel — keep as WoE bin
+  x-sell    378,096  26.88%   8.04%  cross-sell — lower risk
+
+  Phase 4: FLAG_WALK_IN (mandatory — +3.83pp)
+
+---
+
+CHANNEL_TYPE
+  AP+ (Cash loan)    48,252    3.43%  12.81%  highest risk channel
+  Contact center     58,493    4.16%  10.28%  elevated risk
+  Credit and cash    597,007  42.45%   9.00%  moderate
+  Car dealer         406       0.03%   5.17%  lowest risk — secured
+
+  Phase 4: FLAG_CHANNEL_AP_PLUS (mandatory — +4.16pp)
+
+---
+
+NAME_YIELD_GROUP
+  Clean monotonic ordering — higher yield = higher risk:
+  XNA         421,888  30.00%   9.85%  keep as own WoE bin
+  high        306,061  21.76%   9.55%
+  middle      324,971  23.11%   8.04%
+  low_normal  274,880  19.55%   7.13%
+  low_action   78,587   5.59%   6.45%
+
+  Phase 5: Natural WoE bins follow yield order
+
+---
+
+NAME_GOODS_CATEGORY
+  High risk tier:    Insurance (10.34%), Vehicles (10.06%)
+  Neutral tier:      Mobile (8.65%), Computers (8.10%)
+  Protective tier:   Tourism (4.23%), Fitness (4.22%),
+                     Medical Supplies (5.62%), Furniture (5.85%)
+  Phase 5: Group into 3 risk tiers for WoE binning
+
+---
+
+NAME_PORTFOLIO
+  Cards   114,679   8.15%  10.12%  revolving — higher risk
+  XNA     307,209  21.84%   9.74%  sentinel — keep as WoE bin
+  Cash    391,659  27.85%   8.88%  moderate
+  POS     592,460  42.13%   7.64%  lower risk
+  Cars        380   0.03%   5.53%  secured — lowest risk
+
+---
+
+NAME_SELLER_INDUSTRY
+  Auto technology  4,080   0.29%  10.37%  elevated risk
+  XNA             710,202  50.50%  9.34%  keep as WoE bin
+  Connectivity    237,439  16.88%  9.21%  slightly elevated
+  Tourism             374   0.03%  4.28%  protective
+  Phase 5: Group rare categories into Other
+
+---
+
+PRODUCT_COMBINATION
+  Risk tiers:
+  High risk  : Cash Street products (10.10%–11.62%)
+  Medium risk: Card products (9.07%–11.37%)
+  Lower risk : POS products (4.64%–8.81%)
+  Phase 5: Group into Cash Street / Card / Cash X-Sell / POS
+
+---
+
+WEEKDAY_APPR_PROCESS_START
+  Minimal variation (8.04%–8.87%)
+  Expected to screen out on IV in Phase 5
+
+---
+
+NAME_PAYMENT_TYPE
+  Minimal variation between legitimate categories
+  XNA 36.66% at 9.61% — keep as WoE bin
+  Expected to screen out on IV in Phase 5
+
+---
+
+NAME_TYPE_SUITE
+  Children        27,088   3.78%   6.36%  strongest protective
+  Family         181,652  25.32%   7.47%  protective
+  Unaccompanied  426,342  59.43%   8.28%  near population
+  Missing: 48.99% — separate WoE bin
+
+----------------------------------------------------------------
+6. NUMERIC COLUMNS — KEY FINDINGS
+----------------------------------------------------------------
+
+AMT_APPLICATION vs AMT_CREDIT
+  AMT_APPLICATION = 0: 320,850 rows (22.8%) — sentinel
+  AMT_CREDIT = 0:      276,573 rows (19.7%) — sentinel
+  Zero distribution by status:
+    Canceled dominates both (250k+ rows)
+    Approved with AMT_APPLICATION = 0: 39,484 — data error
+    Approved with AMT_CREDIT = 0:       1,165 — data error
+  Phase 5: Replace 0 with NaN for both columns
+  Phase 4: CREDIT_TO_APPLICATION_RATIO (only where AMT_APPLICATION > 0)
+           FLAG_WAS_DOWNGRADED = (ratio < 1)
+           Downgraded applications: 309,118 (21.98%)
+
+DAYS_DECISION
+  Range: -2,922 to -1 (all negative — before application)
+  Clean — no sentinels. Convert to positive days in Phase 4.
+
+SELLERPLACE_AREA
+  Sentinel (-1): 633,057 rows (45.01%)
+  99th pct: 3,570
+  Phase 5: Replace -1 with NaN, Winsorise at 99th pct
+
+DAYS_FIRST_DRAWING
+  Sentinel (365,243): 799,094 rows (56.82%) — majority sentinel
+  Phase 4: FLAG_HAD_DRAWING = (DAYS_FIRST_DRAWING != 365243)
+  Phase 5: Replace 365,243 with NaN
+
+DAYS_FIRST_DUE
+  Sentinel (365,243): 33,962 rows (2.41%)
+  Phase 5: Replace 365,243 with NaN
+
+DAYS_LAST_DUE_1ST_VERSION
+  Sentinel (365,243): 79,099 rows (5.62%)
+  Phase 5: Replace 365,243 with NaN
+
+DAYS_LAST_DUE
+  Sentinel (365,243): 180,792 rows (12.86%)
+  Phase 5: Replace 365,243 with NaN
+
+DAYS_TERMINATION
+  Sentinel (365,243): 194,000 rows (13.79%)
+  Phase 5: Replace 365,243 with NaN
+
+AMT_DOWN_PAYMENT
+  Min: -0.9 (impossible — negative down payment)
+  Phase 5: Cap at 0
+
+NFLAG_LAST_APPL_IN_DAY
+  Mean: 1.000, std: 0.022 — near constant (99.98% = 1)
+  Phase 5: NEAR-ZERO VARIANCE — flag for dropping
+
+RATE_INTEREST_PRIMARY / RATE_INTEREST_PRIVILEGED
+  99.66% missing — only 4,791 rows populated
+  Phase 5: Expected to screen out on high missing gate
+
+CNT_PAYMENT
+  Range: 0-84, mean: 16 months
+  Clean distribution — useful for Phase 4 aggregation
+  Zeros: missing for refused/canceled applications
+
+NFLAG_INSURED_ON_APPROVAL
+  Binary: 0/1, mean: 0.331
+  33.1% of approved loans had insurance
+  Missing 39.69% = refused/canceled (structural)
+  Phase 4: FLAG_INSURED — keep for aggregation
+
+----------------------------------------------------------------
+7. PHASE 4 FEATURE ENGINEERING PLAN
+----------------------------------------------------------------
+All features aggregated to SK_ID_CURR grain
+Note: Always filter to FLAG_LAST_APPL_PER_CONTRACT = 'Y' first
+
+A. Coverage features
+   FLAG_NO_PREV_APPLICATION      — no previous applications
+   COUNT_PREV_TOTAL              — total previous applications
+   DAYS_SINCE_LAST_APPLICATION   — recency of last application
+
+B. Contract status features (mandatory)
+   FLAG_EVER_REFUSED             — any previous refusal
+   COUNT_PREV_APPROVED           — number of approved
+   COUNT_PREV_REFUSED            — number of refused
+   COUNT_PREV_CANCELED           — number of canceled
+   REFUSAL_RATE                  — refused / total
+   APPROVAL_RATE                 — approved / total
+
+C. Rejection reason features (mandatory)
+   FLAG_REJECTED_SCOFR           — ever fraud rejection
+   FLAG_REJECTED_LIMIT           — ever limit rejection
+   FLAG_REJECTED_HC              — ever high credit risk
+   COUNT_REJECTIONS_TOTAL        — total rejections
+
+D. Product features (mandatory)
+   FLAG_REVOLVING_LOAN           — ever revolving loan
+   FLAG_WALK_IN                  — ever walk-in application
+   FLAG_CHANNEL_AP_PLUS          — ever AP+ channel
+   FLAG_EVER_REFRESHED           — refreshed client type
+
+E. Loan purpose features (mandatory)
+   FLAG_PURPOSE_REFUSED_TO_NAME  — ever refused to name goal
+   FLAG_PURPOSE_DEBT_RELATED     — ever debt-related purpose
+   FLAG_PURPOSE_ASSET            — ever asset purchase
+
+F. Amount features
+   CREDIT_TO_APPLICATION_RATIO   — approved / requested
+   FLAG_WAS_DOWNGRADED           — ratio < 1
+   MEAN_AMT_CREDIT               — average approved credit
+   MAX_AMT_CREDIT                — largest approved credit
+   MEAN_AMT_ANNUITY              — average annuity
+   MEAN_CNT_PAYMENT              — average loan term
+
+G. Drawing features
+   FLAG_HAD_DRAWING              — loan was actually drawn
+   DAYS_SINCE_LAST_DECISION      — recency of last decision
+
+H. Insurance
+   FLAG_INSURED                  — was insured on approval
+
+----------------------------------------------------------------
+8. PHASE 5 TREATMENT SUMMARY
+----------------------------------------------------------------
+
+Action                    Columns
+------------------------  ------------------------------------
+Replace 365,243 with NaN  DAYS_FIRST_DRAWING, DAYS_FIRST_DUE,
+                          DAYS_LAST_DUE_1ST_VERSION,
+                          DAYS_LAST_DUE, DAYS_TERMINATION
+Replace 0 with NaN        AMT_APPLICATION, AMT_CREDIT
+Cap at 0                  AMT_DOWN_PAYMENT (negatives)
+Replace -1 with NaN       SELLERPLACE_AREA
+Winsorise at 99th pct     SELLERPLACE_AREA, AMT_ANNUITY,
+                          AMT_APPLICATION, AMT_CREDIT,
+                          AMT_GOODS_PRICE, AMT_DOWN_PAYMENT
+Replace with NaN          NAME_CONTRACT_TYPE = XNA
+                          NAME_CLIENT_TYPE = XNA
+Near-zero variance drop   NFLAG_LAST_APPL_IN_DAY
+High missing gate         RATE_INTEREST_PRIMARY,
+                          RATE_INTEREST_PRIVILEGED
+Separate WoE missing bin  AMT_DOWN_PAYMENT, RATE_DOWN_PAYMENT,
+                          NAME_TYPE_SUITE, DAYS_* (39.69%),
+                          AMT_GOODS_PRICE, AMT_ANNUITY,
+                          CNT_PAYMENT
+Phase 5 grouping          NAME_GOODS_CATEGORY → 3 risk tiers
+                          NAME_CASH_LOAN_PURPOSE → 3 risk tiers
+                          PRODUCT_COMBINATION → 4 risk tiers
+                          NAME_SELLER_INDUSTRY → group rare
+
+----------------------------------------------------------------
+9. KEY INSIGHTS FOR MODEL DEVELOPMENT
+----------------------------------------------------------------
+
+1. FLAG_EVER_REFUSED is a mandatory feature — previous refusal
+   by Home Credit is the strongest signal in this table (+3.39pp).
+   Home Credit's own risk models flagged these applicants.
+
+2. SCOFR rejection reason has 21.10% bad rate — fraud detection
+   flag. FLAG_REJECTED_SCOFR is mandatory.
+
+3. walk-in applications have 12.47% bad rate (+3.83pp) —
+   unplanned borrowing signals financial stress or impulsivity.
+
+4. DAYS_FIRST_DRAWING sentinel (56.82%) — majority of records
+   have no drawing. FLAG_HAD_DRAWING is a meaningful feature.
+
+5. 365,243 sentinel appears in 5 DAYS columns — same pattern
+   as DAYS_EMPLOYED in application_train. Systematic encoding
+   of "not applicable" for refused/canceled applications.
+
+6. AMT_APPLICATION and AMT_CREDIT zeros (22-23%) cluster in
+   Canceled applications — structural, not random data errors.
+
+7. CREDIT_TO_APPLICATION_RATIO — 21.98% of applications were
+   downgraded. Ratio < 1 signals Home Credit had risk concerns
+   even for approved applications.
+
+8. First-time applicants (5.4%) have LOWER bad rate (5.96%)
+   than those with history (8.19%) — opposite to bureau finding.
+   Home Credit screens new customers more carefully.
+
+================================================================
+END OF PREVIOUS_APPLICATION EDA FINDINGS
+================================================================

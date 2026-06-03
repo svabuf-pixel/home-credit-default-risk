@@ -161,34 +161,9 @@ def check_overlap(df1, df2, key_col):
         print(overlap)
 
 
-# -----------------------------------------------------------------------------
-# 7. CARDINALITY REPORT
-# -----------------------------------------------------------------------------
-def cardinality_report(df, categorical_cols):
-    """
-    Prints unique value count, top category, top category count,
-    and missing % for each categorical column.
-    Used to identify high cardinality and rare categories.
-
-    Usage:
-        cardinality_report(df_train, categorical_data)
-    """
-    print(f"{'Column':<20} {'Unique':>8} {'Top Value':<30} {'Top Count':>10} {'Missing %':>10}")
-    print("─" * 100)
-    for col in categorical_cols:
-        if col in df.columns:
-            n_unique    = df[col].nunique()
-            top_val     = df[col].value_counts().index[0]
-            top_count   = df[col].value_counts().iloc[0]
-            missing_pct = df[col].isna().mean() * 100
-
-            print(f"{col:<20} {n_unique:>8} {str(top_val):<30} {top_count:>10} {missing_pct:>9.2f}%")
-
-
-
 
 # -----------------------------------------------------------------------------
-# 8. SENTINEL BAD RATE CHECK
+#  SENTINEL BAD RATE CHECK
 # -----------------------------------------------------------------------------
 def sentinel_bad_rate(df, column, condition, target_col="TARGET"):
     """
@@ -212,7 +187,7 @@ def sentinel_bad_rate(df, column, condition, target_col="TARGET"):
     print(f"Difference:                       {sentinel_bad - non_sentinel_bad:+.2f}pp")
 
 # -----------------------------------------------------------------------------
-# 9 . SENTINEL BAD RATE CHECK A MASK ON A DIFFERENT DATAFRAME
+# SENTINEL BAD RATE CHECK A MASK ON A DIFFERENT DATAFRAME
 # -----------------------------------------------------------------------------
 
 def coverage_bad_rate(df_main, df_child, key_col, target_col="TARGET"):
@@ -239,11 +214,52 @@ def coverage_bad_rate(df_main, df_child, key_col, target_col="TARGET"):
     print(f"Difference:                 {thin_file_bad - covered_bad:+.2f}pp")
 
 # -----------------------------------------------------------------------------
-# 9 . CARDINAL TOTAL FREQUENCY
-# -----------------------------------------------------------------------------
+def categorical_analysis(df, categorical_cols, target_col="TARGET"):
+    """
+    Full categorical analysis combining:
+    - Cardinality and missing rate summary
+    - Value counts and % of population
+    - Bad rate per category vs population
+    - Rare category flags (<5% of population)
 
-def cardinal_freq(df, categorical_columns ):
-    for col in categorical_columns:
-        if col in df:
-            all_freq = df[col].value_counts()
-            print(f"{all_freq}\n")
+    Usage:
+        categorical_analysis(df_train, categorical_data)
+        categorical_analysis(prev_with_target, categorical_prev)
+    """
+    population_bad_rate = df[target_col].mean() * 100 if target_col in df.columns else None
+
+    for col in categorical_cols:
+        if col not in df.columns:
+            continue
+
+        print(f"\n{'═'*70}")
+        print(f"  {col}")
+        print(f"  Unique: {df[col].nunique()}   "
+              f"Missing: {df[col].isna().mean()*100:.2f}%")
+        print(f"{'═'*70}")
+
+        counts  = df[col].value_counts()
+        pct     = df[col].value_counts(normalize=True) * 100
+
+        if population_bad_rate is not None and target_col in df.columns:
+            bad_rates = df.groupby(col)[target_col].mean() * 100
+            summary = pd.DataFrame({
+                "Count"    : counts,
+                "Pct %"    : pct.round(2),
+                "Bad Rate" : bad_rates.round(2),
+                "vs Pop"   : (bad_rates - population_bad_rate).round(2)
+            }).sort_values("Bad Rate", ascending=False)
+        else:
+            summary = pd.DataFrame({
+                "Count" : counts,
+                "Pct %" : pct.round(2)
+            }).sort_values("Count", ascending=False)
+
+        print(summary.to_string())
+
+        if population_bad_rate is not None:
+            print(f"\n  Population bad rate : {population_bad_rate:.2f}%")
+
+        rare = summary[summary["Pct %"] < 5].index.tolist()
+        if rare:
+            print(f"  Rare categories (<5%): {', '.join(str(r) for r in rare)}")
