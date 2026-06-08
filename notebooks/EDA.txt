@@ -1382,3 +1382,864 @@ Phase 5 grouping          NAME_GOODS_CATEGORY → 3 risk tiers
 ================================================================
 END OF PREVIOUS_APPLICATION EDA FINDINGS
 ================================================================
+
+================================================================
+PHASE 2 - STEP 4: EDA FINDINGS — POS_CASH_BALANCE TABLE
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: POS_CASH_balance (filtered via previous_application → application_train)
+Shape: 8,251,754 rows x 8 columns
+
+Filter logic:
+  WHERE SK_ID_PREV IN (
+      SELECT SK_ID_PREV FROM previous_application
+      WHERE SK_ID_CURR IN (SELECT SK_ID_CURR FROM application_train)
+  )
+
+----------------------------------------------------------------
+1. TABLE STRUCTURE
+----------------------------------------------------------------
+Columns:
+  SK_ID_PREV             — foreign key to previous_application (exclude)
+  SK_ID_CURR             — foreign key to application_train (exclude)
+  MONTHS_BALANCE         — monthly grain (negative = before application)
+  CNT_INSTALMENT         — total instalments on contract
+  CNT_INSTALMENT_FUTURE  — remaining instalments
+  NAME_CONTRACT_STATUS   — monthly contract status
+  SK_DPD                 — days past due this month
+  SK_DPD_DEF             — days past due (regulatory default definition)
+
+Column types:
+  Numeric     : 5 columns (excluding SK_ID_* keys)
+  Categorical : 1 column (NAME_CONTRACT_STATUS)
+  Binary FLAG : 0 columns
+
+----------------------------------------------------------------
+2. MISSING VALUE ANALYSIS
+----------------------------------------------------------------
+Column                  Missing %   Treatment
+----------------------  ----------  --------------------------
+CNT_INSTALMENT          0.26%       Median imputation Phase 5
+CNT_INSTALMENT_FUTURE   0.26%       Median imputation Phase 5
+
+All other columns: no missing values
+
+----------------------------------------------------------------
+3. COVERAGE ANALYSIS
+----------------------------------------------------------------
+Applicants with POS records    : 286,967 (93.3%)
+Thin-file (no POS records)     : 20,544  (6.7%)
+Bad rate — has POS records     : 8.15%
+Bad rate — thin file           : 6.95%
+Difference                     : -1.21pp
+
+Decision:
+  Difference is small (-1.21pp) — NOT informative enough
+  to create FLAG_NO_POS_HISTORY.
+  Missing POS features after aggregation → impute with 0.
+
+----------------------------------------------------------------
+4. MONTHS_BALANCE ANALYSIS
+----------------------------------------------------------------
+Range       : -96 to -1 (all negative — before application)
+Mean        : -33.4 months (~2.8 years back)
+Median      : -26 months
+History depth: 96 months (8 years)
+
+Recency windows for Phase 4:
+  LAST_3M   : MONTHS_BALANCE >= -3
+  LAST_6M   : MONTHS_BALANCE >= -6
+  LAST_12M  : MONTHS_BALANCE >= -12  (most predictive)
+  LAST_24M  : MONTHS_BALANCE >= -24
+
+----------------------------------------------------------------
+5. NAME_CONTRACT_STATUS — KEY RISK VARIABLE
+----------------------------------------------------------------
+
+Status              Count       %       Bad Rate   vs Pop
+------------------  ----------  ------  ---------  --------
+Amortized debt      44          0.00%   100.00%    +92.62pp  ← CRITICAL
+Demand              1,612       0.02%    23.33%    +15.95pp  ← CRITICAL
+Canceled            12          0.00%    16.67%    unreliable (too small)
+Returned to store   4,568       0.06%    10.31%    +2.94pp
+Signed              74,356      0.90%     7.84%    +0.46pp
+Approved            4,212       0.05%     7.57%    +0.20pp
+Completed           590,025     7.15%     7.43%    +0.05pp
+Active              7,576,923  91.82%     7.36%    -0.01pp
+XNA                 2           0.00%     0.00%    sentinel
+
+Population bad rate: 7.38%
+
+Key findings:
+
+1. AMORTIZED DEBT — 100% bad rate (44 rows)
+   Every single applicant with this status defaulted.
+   Small volume but absolute signal.
+   Phase 4: FLAG_EVER_AMORTIZED_DEBT (mandatory)
+
+2. DEMAND — 23.33% bad rate (1,612 rows)
+   Loan called in by Home Credit — severe breach of contract.
+   Strong risk signal.
+   Phase 4: FLAG_EVER_DEMAND (mandatory)
+
+3. RETURNED TO STORE — 10.31% bad rate
+   Goods returned — signals financial stress or dissatisfaction.
+   Phase 4: FLAG_EVER_RETURNED (worth including)
+
+4. ACTIVE vs COMPLETED — near identical bad rates (7.36% vs 7.43%)
+   No meaningful risk difference between ongoing and completed loans.
+
+5. XNA — 2 rows — sentinel, replace with NaN in Phase 5
+
+Phase 5 WoE grouping strategy:
+  High risk bin : Amortized debt, Demand, Canceled
+  Medium risk   : Returned to store, Signed
+  Low risk      : Active, Completed, Approved
+
+----------------------------------------------------------------
+6. NUMERIC COLUMNS — KEY FINDINGS
+----------------------------------------------------------------
+
+SK_DPD (days past due — monthly)
+  Skewness    : 21.128 (Highly skewed Right)
+  75th pct    : 0 (vast majority zero)
+  99th pct    : 16
+  Max         : 2,743 (extreme outlier)
+  DPD > 0     : 197,806 rows (2.40%)
+  DPD > 30    : 63,349 rows (0.77%)
+  Bad rate — DPD > 0  : 10.23% (+2.92pp vs no DPD 7.31%)
+  Phase 5     : Winsorise at 99th percentile (16)
+  Phase 4     : FLAG_EVER_DPD, MAX_DPD, COUNT_MONTHS_DPD
+
+SK_DPD_DEF (regulatory default DPD)
+  Skewness    : 324.699 (Highly skewed Right — near binary)
+  75th pct    : 0
+  99th pct    : 1 (effectively binary in practice)
+  Max         : 1,117 (extreme outlier)
+  DPD_DEF > 0 : 91,405 rows (1.11%)
+  Bad rate — DPD_DEF > 0 : 11.48% (+4.15pp vs no DPD 7.33%)
+  Note        : MORE predictive than SK_DPD (+4.15pp vs +2.92pp)
+  Phase 4     : FLAG_EVER_DPD_DEF (mandatory — strongest signal)
+  Phase 5     : Treat as binary — Winsorise at 99th pct
+
+MONTHS_BALANCE
+  Range       : -96 to -1
+  Note        : Monthly grain — used for recency windows only
+  Treatment   : Not aggregated directly — used as filter
+
+CNT_INSTALMENT
+  Range       : 1 to 84
+  Mean        : 17.3 months
+  Skewness    : 1.580 (Highly skewed Right)
+  Note        : Total loan term in months
+  Phase 4     : MEAN_CNT_INSTALMENT per applicant
+
+CNT_INSTALMENT_FUTURE
+  Range       : 0 to 84
+  Mean        : 10.8 remaining instalments
+  Skewness    : 1.825 (Highly skewed Right)
+  Note        : Remaining loan term
+  Phase 4     : Use for COMPLETION_RATIO
+
+----------------------------------------------------------------
+7. PHASE 4 FEATURE ENGINEERING PLAN — POS_CASH_BALANCE
+----------------------------------------------------------------
+Aggregation grain: SK_ID_PREV first → then SK_ID_CURR
+
+A. Risk flags (mandatory)
+   FLAG_EVER_AMORTIZED_DEBT    — any amortized debt status
+   FLAG_EVER_DEMAND            — any demand status
+   FLAG_EVER_RETURNED          — any returned to store status
+   FLAG_EVER_DPD               — any SK_DPD > 0
+   FLAG_EVER_DPD_DEF           — any SK_DPD_DEF > 0 (mandatory)
+
+B. DPD features
+   MAX_SK_DPD                  — worst DPD ever
+   MAX_SK_DPD_DEF              — worst regulatory DPD ever
+   COUNT_MONTHS_DPD            — months with any DPD
+   COUNT_MONTHS_DPD_DEF        — months with regulatory DPD
+   SUM_SK_DPD                  — total DPD days
+
+C. Recency features — last 3/6/12/24 months
+   MAX_DPD_LAST_3M             — worst DPD in last 3 months
+   MAX_DPD_LAST_6M             — worst DPD in last 6 months
+   MAX_DPD_LAST_12M            — worst DPD in last 12 months
+   FLAG_DPD_LAST_3M            — any DPD in last 3 months
+   FLAG_DPD_DEF_LAST_12M       — any regulatory DPD last 12M
+
+D. Loan completion features
+   COMPLETION_RATIO            — (CNT_INSTALMENT - CNT_INSTALMENT_FUTURE)
+                                  / CNT_INSTALMENT
+   MEAN_CNT_INSTALMENT         — average loan term
+   MEAN_CNT_INSTALMENT_FUTURE  — average remaining term
+
+E. Contract status features
+   COUNT_ACTIVE_POS            — active POS/cash loans
+   COUNT_COMPLETED_POS         — completed POS/cash loans
+   COUNT_HIGH_RISK_STATUS      — amortized + demand + returned
+
+----------------------------------------------------------------
+8. PHASE 5 TREATMENT SUMMARY
+----------------------------------------------------------------
+
+Action                    Columns
+------------------------  ------------------------------------
+Winsorise at 99th pct     SK_DPD (cap at 16)
+                          SK_DPD_DEF (cap at 1 — near binary)
+Median imputation         CNT_INSTALMENT
+                          CNT_INSTALMENT_FUTURE
+Replace with NaN          NAME_CONTRACT_STATUS = XNA
+Group rare categories     NAME_CONTRACT_STATUS:
+                          Amortized debt + Demand + Canceled
+                          → High Risk bin
+Impute with 0 after agg   All DPD features (missing = no DPD)
+
+----------------------------------------------------------------
+9. KEY INSIGHTS FOR MODEL DEVELOPMENT
+----------------------------------------------------------------
+
+1. FLAG_EVER_DPD_DEF is the strongest signal in this table —
+   11.48% bad rate vs 7.33% when no regulatory DPD (+4.15pp).
+   More predictive than general DPD (+2.92pp).
+   Mandatory Phase 4 feature.
+
+2. Amortized debt status = 100% bad rate — perfect predictor
+   for the 44 applicants with this status. FLAG_EVER_AMORTIZED_DEBT
+   is mandatory despite tiny volume.
+
+3. Demand status = 23.33% bad rate — loan called in signals
+   severe financial distress. FLAG_EVER_DEMAND is mandatory.
+
+4. SK_DPD_DEF 99th percentile = 1 — effectively binary in
+   practice. Treat as flag rather than continuous variable
+   for feature engineering.
+
+5. Coverage thin-file differential is small (-1.21pp) —
+   no FLAG_NO_POS_HISTORY needed. Impute with 0 after
+   aggregation.
+
+6. Recency windows (3/6/12/24 months) are key —
+   recent DPD is far more predictive than historical DPD.
+   Always engineer both lifetime and recency versions.
+
+7. COMPLETION_RATIO is a useful engineered feature —
+   applicants early in their loan term have higher outstanding
+   balance and potentially higher financial stress.
+
+================================================================
+END OF POS_CASH_BALANCE EDA FINDINGS
+================================================================
+
+================================================================
+PHASE 2 - STEP 4: EDA FINDINGS — INSTALLMENTS_PAYMENTS TABLE
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: installments_payments (filtered via previous_application → application_train)
+Shape: 10,572,221 rows x 8 columns
+
+Filter logic:
+  WHERE SK_ID_PREV IN (
+      SELECT SK_ID_PREV FROM previous_application
+      WHERE SK_ID_CURR IN (SELECT SK_ID_CURR FROM application_train)
+  )
+
+----------------------------------------------------------------
+1. TABLE STRUCTURE
+----------------------------------------------------------------
+Columns:
+  SK_ID_PREV              — foreign key to previous_application (exclude)
+  SK_ID_CURR              — foreign key to application_train (exclude)
+  NUM_INSTALMENT_VERSION  — version of instalment schedule
+  NUM_INSTALMENT_NUMBER   — instalment sequence number
+  DAYS_INSTALMENT         — when payment was DUE (negative = before app)
+  DAYS_ENTRY_PAYMENT      — when payment was ACTUALLY MADE
+  AMT_INSTALMENT          — amount DUE
+  AMT_PAYMENT             — amount ACTUALLY PAID
+
+Column types:
+  Numeric     : 6 columns (excluding SK_ID_* keys)
+  Categorical : 0 columns
+  Binary FLAG : 0 columns
+
+No categoricals — purely behavioural numeric table.
+
+----------------------------------------------------------------
+2. MISSING VALUE ANALYSIS
+----------------------------------------------------------------
+Column               Missing %   Treatment
+-------------------  ----------  --------------------------
+AMT_PAYMENT          0.02%       Median imputation Phase 5
+DAYS_ENTRY_PAYMENT   0.02%       Median imputation Phase 5
+
+Note: Both missing in same 2,212 rows — payment never recorded.
+      Consider treating as unpaid (AMT_PAYMENT = 0) rather
+      than median imputation for these rows.
+
+All other columns: no missing values.
+
+----------------------------------------------------------------
+3. COVERAGE ANALYSIS
+----------------------------------------------------------------
+Applicants with records    : 289,406 (94.1%)
+Thin-file (no records)     : 18,105  (5.9%)
+Bad rate — has records     : 8.19%
+Bad rate — thin file       : 6.21%
+Difference                 : -1.98pp
+
+Decision:
+  Thin-file bad rate is lower — consistent with previous_application
+  and POS_CASH patterns. Not informative enough for a flag.
+  Missing features after aggregation → impute with 0.
+
+----------------------------------------------------------------
+4. ENGINEERED FEATURES — PAYMENT BEHAVIOUR ANALYSIS
+----------------------------------------------------------------
+
+DAYS_LATE = DAYS_ENTRY_PAYMENT - DAYS_INSTALMENT
+  Positive = paid AFTER due date (late)
+  Negative = paid BEFORE due date (early)
+  Zero     = paid exactly on due date
+
+Payment timing distribution:
+  Early (< 0)   : 7,572,770 (71.63%)
+  On time (= 0) : 2,060,912 (19.49%)
+  Late (> 0)    : 936,327   (8.86%)
+  Mean DAYS_LATE: -9.35 days (average payment 9 days early)
+
+DAYS_LATE thresholds:
+  > 0 days  : 936,327  (8.86%)   Bad rate: 9.94% vs 7.57% (+2.37pp)
+  > 30 days : 30,101   (0.28%)
+  > 60 days : 12,237   (0.12%)
+  > 90 days : 9,475    (0.09%)
+  99th pct  : 18 days
+  Max       : 2,790 days (extreme outlier)
+
+AMT_UNDERPAID = AMT_INSTALMENT - AMT_PAYMENT
+  Underpaid (> 0): 1,071,987 (10.14%)
+  Bad rate — underpaid: 9.96% vs 7.54% (+2.42pp)
+  Note: Late payment and underpayment have almost identical
+        predictive power (+2.37pp vs +2.42pp)
+
+RESCHEDULED LOANS (NUM_INSTALMENT_VERSION > 1)
+  Count     : 857,706 (8.11%)
+  Bad rate  : 7.21% vs non-rescheduled 7.83% (-0.62pp)
+  Surprise  : Rescheduled loans have LOWER bad rate
+  Reason    : Rescheduling = proactive intervention by Home Credit
+              Borrowers who complete rescheduled loans demonstrate
+              resilience — rescheduling prevents default
+  Decision  : Include in Phase 4 — potential protective signal
+              Let IV screening decide in Phase 5
+
+----------------------------------------------------------------
+5. NUMERIC COLUMNS — SKEWNESS & OUTLIERS
+----------------------------------------------------------------
+
+NUM_INSTALMENT_VERSION
+  Skewness  : 9.738 (Highly skewed Right)
+  Mean      : 0.919, Max: 178, 99th pct: 4
+  Meaning   : Version > 1 = loan was rescheduled
+  Phase 5   : Winsorise at 99th pct (4)
+  Phase 4   : FLAG_RESCHEDULED, COUNT_RESCHEDULES
+
+NUM_INSTALMENT_NUMBER
+  Skewness  : 2.860 (Highly skewed Right)
+  Max       : 277, 99th pct: 102
+  Meaning   : Instalment sequence — proxy for loan length
+  Phase 5   : Winsorise at 99th pct (102)
+
+DAYS_INSTALMENT
+  Skewness  : -0.686 (Moderately skewed Left)
+  Range     : -2,915 to -1 (all negative — before application)
+  Meaning   : When each payment was due
+  Treatment : Convert to positive days for recency features
+
+DAYS_ENTRY_PAYMENT
+  Skewness  : -0.683 (Moderately skewed Left)
+  Range     : -4,921 to -1
+  Note      : Min (-4,921) older than DAYS_INSTALMENT min (-2,915)
+  Anomaly   : 10 rows with DAYS_ENTRY_PAYMENT < -2,915
+              → cap at -2,915 in Phase 5 (backdating errors)
+
+AMT_INSTALMENT
+  Skewness  : 15.689 (Highly skewed Right)
+  Min       : 0, Max: 3,771,487, 99th pct: 157,527
+  Phase 5   : Winsorise at 99th pct (157,527)
+
+AMT_PAYMENT
+  Skewness  : 14.452 (Highly skewed Right)
+  Min       : 0, Max: 3,771,487, 99th pct: 189,873
+  Note      : 99th pct higher than AMT_INSTALMENT — overpayments exist
+  Phase 5   : Winsorise at 99th pct (189,873)
+
+----------------------------------------------------------------
+6. DATA QUALITY ISSUES
+----------------------------------------------------------------
+
+Issue                              Rows    Treatment
+---------------------------------  ------  --------------------------
+DAYS_ENTRY_PAYMENT < -2,915        10      Cap at -2,915 in Phase 5
+AMT_INSTALMENT = 0                 check   Investigate in Phase 5
+AMT_PAYMENT = 0 (missing)          2,212   Treat as unpaid (value = 0)
+NUM_INSTALMENT_VERSION max = 178   1       Winsorise at 4 (99th pct)
+
+----------------------------------------------------------------
+7. PHASE 4 FEATURE ENGINEERING PLAN
+----------------------------------------------------------------
+Aggregation grain: SK_ID_PREV first → then SK_ID_CURR
+
+A. Payment timing features (mandatory)
+   FLAG_EVER_LATE              — any late payment ever
+   FLAG_EVER_LATE_30           — any payment > 30 days late
+   FLAG_EVER_LATE_60           — any payment > 60 days late
+   FLAG_EVER_LATE_90           — any payment > 90 days late
+   COUNT_LATE_PAYMENTS         — total late payments
+   MAX_DAYS_LATE               — worst late payment ever
+   MEAN_DAYS_LATE              — average days late
+   SUM_DAYS_LATE               — total days late
+
+B. Payment amount features (mandatory)
+   FLAG_EVER_UNDERPAID         — any underpayment ever
+   COUNT_UNDERPAYMENTS         — total underpayments
+   SUM_AMT_UNDERPAID           — total amount underpaid
+   MEAN_AMT_UNDERPAID          — average underpayment
+   PAYMENT_RATIO               — AMT_PAYMENT / AMT_INSTALMENT
+                                  (ratio < 1 = underpayment)
+
+C. Recency features — last 3/6/12/24 months
+   Use DAYS_INSTALMENT as time reference
+   MAX_DAYS_LATE_LAST_3M       — worst late payment last 3 months
+   MAX_DAYS_LATE_LAST_6M       — worst late payment last 6 months
+   MAX_DAYS_LATE_LAST_12M      — worst late payment last 12 months
+   COUNT_LATE_LAST_12M         — late payments in last 12 months
+   FLAG_LATE_LAST_3M           — any late payment last 3 months
+   PAYMENT_RATIO_LAST_12M      — payment ratio last 12 months
+
+D. Rescheduling features
+   FLAG_RESCHEDULED            — any rescheduled loan
+   COUNT_RESCHEDULES           — total reschedules
+   Note: Potential protective signal — let IV decide
+
+E. Loan history features
+   COUNT_INSTALMENTS_TOTAL     — total instalments paid
+   MAX_NUM_INSTALMENT_NUMBER   — longest loan term
+   MEAN_AMT_INSTALMENT         — average instalment amount
+
+----------------------------------------------------------------
+8. PHASE 5 TREATMENT SUMMARY
+----------------------------------------------------------------
+
+Action                    Columns
+------------------------  ------------------------------------
+Winsorise at 99th pct     AMT_INSTALMENT (157,527)
+                          AMT_PAYMENT (189,873)
+                          NUM_INSTALMENT_VERSION (4)
+                          NUM_INSTALMENT_NUMBER (102)
+                          DAYS_LATE (18)
+Cap at -2,915             DAYS_ENTRY_PAYMENT (10 outlier rows)
+Median imputation         AMT_PAYMENT (2,212 missing)
+                          DAYS_ENTRY_PAYMENT (2,212 missing)
+Impute with 0 after agg   All late/underpaid features
+                          (missing = no records = no issues)
+
+----------------------------------------------------------------
+9. KEY INSIGHTS FOR MODEL DEVELOPMENT
+----------------------------------------------------------------
+
+1. This is the most behaviourally rich table in the dataset.
+   Actual payment behaviour (timing + amount) is the strongest
+   predictor of future default in consumer credit.
+
+2. Late payment bad rate (9.94%) and underpayment bad rate
+   (9.96%) are almost identical — both +2.4pp above population.
+   These two signals are largely correlated — often co-occur.
+
+3. RESCHEDULED loans have LOWER bad rate (7.21%) than
+   non-rescheduled (7.83%). Counterintuitive but logical —
+   rescheduling = proactive intervention that prevents default.
+   Do not use as a risk flag — potential protective signal.
+
+4. 71.63% of payments are early — positive population signal.
+   The 8.86% late payments are concentrated risk.
+
+5. DAYS_LATE 99th percentile = 18 days — most late payments
+   are minor. DPD thresholds (30/60/90) are essential to
+   capture severity of delinquency.
+
+6. PAYMENT_RATIO (AMT_PAYMENT / AMT_INSTALMENT) is a key
+   engineered feature — captures both underpayment AND
+   overpayment patterns. Ratio < 1 = financial stress.
+
+7. Recency is critical — MAX_DAYS_LATE_LAST_3M is likely
+   the most predictive single feature from this table.
+   Recent behaviour outweighs historical behaviour.
+
+8. Two-level aggregation required:
+   installments_payments → SK_ID_PREV grain → SK_ID_CURR grain
+   → merge onto application_train
+
+================================================================
+END OF INSTALLMENTS_PAYMENTS EDA FINDINGS
+================================================================
+
+================================================================
+PHASE 2 - STEP 4: EDA FINDINGS — CREDIT_CARD_BALANCE TABLE
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: credit_card_balance (filtered via previous_application → application_train)
+Shape: 2,354,993 rows x 23 columns
+
+Filter logic:
+  WHERE SK_ID_PREV IN (
+      SELECT SK_ID_PREV FROM previous_application
+      WHERE SK_ID_CURR IN (SELECT SK_ID_CURR FROM application_train)
+  )
+
+----------------------------------------------------------------
+1. TABLE STRUCTURE
+----------------------------------------------------------------
+Key columns (excluded from modelling):
+  SK_ID_PREV   — foreign key to previous_application
+  SK_ID_CURR   — foreign key to application_train
+
+Column types:
+  Numeric     : 20 columns (excluding SK_ID_* keys)
+  Categorical : 1 column (NAME_CONTRACT_STATUS)
+  Binary FLAG : 0 columns
+
+Note: AMT_RECIVABLE is a typo in the original dataset
+      (should be AMT_RECEIVABLE). Keep as-is to match source.
+
+----------------------------------------------------------------
+2. MISSING VALUE ANALYSIS
+----------------------------------------------------------------
+
+Column                      Missing %   Type          Treatment
+--------------------------  ----------  ------------  ---------------------------
+AMT_PAYMENT_CURRENT         22.89%      Structural    Separate WoE missing bin
+                                                      Missing = no payment month
+CNT_DRAWINGS_POS_CURRENT    22.13%      Structural    Impute with 0
+AMT_DRAWINGS_ATM_CURRENT    22.13%      Structural    Impute with 0
+CNT_DRAWINGS_ATM_CURRENT    22.13%      Structural    Impute with 0
+AMT_DRAWINGS_POS_CURRENT    22.13%      Structural    Impute with 0
+AMT_DRAWINGS_OTHER_CURRENT  22.13%      Structural    Impute with 0
+CNT_DRAWINGS_OTHER_CURRENT  22.13%      Structural    Impute with 0
+CNT_INSTALMENT_MATURE_CUM   8.41%       Structural    Separate WoE missing bin
+AMT_INST_MIN_REGULARITY     8.41%       Structural    Separate WoE missing bin
+
+Note: 22.13% missing drawing columns are same 521,094 rows —
+      months where no drawings were made, breakdown not recorded.
+      Impute with 0 — missing = no drawing activity.
+
+Note: 8.41% missing instalment columns are same 198,155 rows —
+      early months of card life before instalment tracking began.
+
+----------------------------------------------------------------
+3. COVERAGE ANALYSIS
+----------------------------------------------------------------
+Applicants with credit card records : 77,934  (25.3%)
+Thin-file (no credit card records)  : 229,577 (74.7%)
+Bad rate — has credit card records  : 9.04%
+Bad rate — thin file                : 7.75%
+Difference                          : +1.29pp
+
+Note: Credit card holders have HIGHER bad rate than non-holders.
+      Revolving debt is generally riskier than instalment loans.
+      Coverage is lowest of all child tables (25.3%) —
+      not all applicants have Home Credit credit cards.
+
+Decision: Small positive differential (+1.29pp) — consider
+          FLAG_HAS_CREDIT_CARD as a weak risk signal in Phase 4.
+
+----------------------------------------------------------------
+4. NAME_CONTRACT_STATUS
+----------------------------------------------------------------
+
+Status          Count       %       Bad Rate   vs Pop
+--------------  ----------  ------  ---------  --------
+Refused         14          0.00%   14.29%     +6.57pp
+Active          2,285,389   97.04%  7.73%      +0.02pp
+Completed       59,899      2.54%   7.10%      -0.61pp
+Signed          9,226       0.39%   6.95%      -0.76pp
+Sent proposal   458         0.02%   3.93%      -3.78pp
+Approved        5           0.00%   0.00%      unreliable
+Demand          2           0.00%   0.00%      unreliable
+
+Population bad rate: 7.71%
+
+Key findings:
+- 97.04% Active — snapshot of currently active credit cards
+- Minimal risk variation across statuses
+- Expected to screen out on low IV in Phase 5
+- Refused (14 rows) too small to be reliable
+- Phase 5: Group rare categories — Approved/Demand/Sent proposal
+           into single Other bin
+
+----------------------------------------------------------------
+5. UTILISATION ANALYSIS — KEY ENGINEERED FEATURE
+----------------------------------------------------------------
+
+UTILISATION = AMT_BALANCE / AMT_CREDIT_LIMIT_ACTUAL
+
+This is the most important ratio in credit card risk analysis.
+High utilisation = near or over credit limit = financial stress.
+
+Distribution:
+  Count  : 2,000,688 (where credit limit > 0)
+  Mean   : 0.383 (38.3% average utilisation)
+  Median : 0.039 (half use under 4%)
+  75th   : 0.886 (top quarter near limit)
+  Min    : -1.800 (negative — overpaid/refund)
+  Max    : 11.778 (1,178% over limit — extreme outlier)
+
+Utilisation thresholds:
+  High utilisation (>90%)  : 479,793 records (20.37%)
+  Over limit (>100%)       : 234,562 records (9.96%)
+
+Bad rates:
+  High utilisation (>90%)  : 10.67% vs 6.96% (+3.71pp)
+  Over limit (>100%)       : 11.98% vs 7.24% (+4.74pp) ← STRONGEST
+
+Phase 4 features:
+  → FLAG_EVER_OVER_LIMIT        — mandatory (11.98% bad rate)
+  → FLAG_EVER_HIGH_UTIL         — mandatory (10.67% bad rate)
+  → MAX_UTILISATION             — worst utilisation ever
+  → MEAN_UTILISATION_LAST_12M   — average last 12 months
+  → COUNT_MONTHS_OVER_LIMIT     — months over limit
+  → COUNT_MONTHS_HIGH_UTIL      — months >90% utilisation
+
+Phase 5: Winsorise utilisation at 99th pct
+         Cap negative utilisation at 0
+
+----------------------------------------------------------------
+6. PAYMENT BEHAVIOUR ANALYSIS
+----------------------------------------------------------------
+
+AMT_PAYMENT_CURRENT vs AMT_INST_MIN_REGULARITY
+  Paying only minimum (<= 1.1x minimum): 555,803 (23.60%)
+  Bad rate — minimum only : 9.51% vs 7.15% (+2.36pp)
+  Bad rate — paying more  : 7.15%
+
+Interpretation:
+  23.60% of monthly records show minimum-only payment.
+  Paying only minimum = servicing interest only, not reducing
+  principal — classic debt trap / financial stress signal.
+
+Phase 4 features:
+  → FLAG_MIN_PAYMENT_ONLY       — mandatory (paying minimum only)
+  → PAYMENT_VS_MIN_RATIO        — AMT_PAYMENT_CURRENT /
+                                   AMT_INST_MIN_REGULARITY
+  → COUNT_MONTHS_MIN_PAYMENT    — months paying minimum only
+  → MEAN_PAYMENT_VS_MIN_LAST_12M — trend in payment behaviour
+
+----------------------------------------------------------------
+7. ATM DRAWING ANALYSIS
+----------------------------------------------------------------
+
+ATM cash withdrawals from credit card = financial stress signal.
+People use ATM drawings when they need emergency cash and have
+no other options. Most expensive way to use a credit card.
+
+Any ATM drawing (> 0) : 296,069 records (12.57%)
+ATM 99th percentile   : 157,500
+Bad rate — ATM drawing: 10.63% vs 7.29% (+3.34pp)
+
+Phase 4 features:
+  → FLAG_EVER_ATM_DRAWING       — mandatory (10.63% bad rate)
+  → SUM_AMT_DRAWINGS_ATM        — total ATM drawings
+  → MEAN_AMT_DRAWINGS_ATM_LAST_12M — recent ATM drawing trend
+  → ATM_TO_TOTAL_DRAWING_RATIO  — ATM / total drawings
+
+----------------------------------------------------------------
+8. DPD ANALYSIS
+----------------------------------------------------------------
+
+SK_DPD (days past due — monthly)
+  DPD > 0       : 89,033 (3.78%)
+  99th pct      : 184 (much higher than POS_CASH = 16)
+  Max           : 2,770
+  Note          : Credit card DPD more extreme than POS_CASH
+
+SK_DPD_DEF (regulatory default DPD)
+  DPD_DEF > 0   : 51,877 (2.20%)
+  99th pct      : 1 (effectively binary — same as POS_CASH)
+  Max           : 151
+
+Comparison with POS_CASH_balance:
+  Credit card DPD occurs more often (3.78% vs 2.40%) and
+  is more severe (99th pct 184 vs 16). Credit card delinquency
+  is a stronger default signal than POS loan delinquency.
+
+Phase 4 features:
+  → FLAG_EVER_DPD               — any SK_DPD > 0
+  → FLAG_EVER_DPD_DEF           — any SK_DPD_DEF > 0 (mandatory)
+  → MAX_DPD                     — worst DPD ever
+  → MAX_DPD_LAST_3M             — worst DPD last 3 months
+  → MAX_DPD_LAST_12M            — worst DPD last 12 months
+  → COUNT_MONTHS_DPD            — months with any DPD
+
+Phase 5: Winsorise SK_DPD at 99th pct (184)
+         SK_DPD_DEF treat as binary
+
+----------------------------------------------------------------
+9. NUMERIC COLUMNS — OUTLIERS & DATA QUALITY
+----------------------------------------------------------------
+
+Negative balances:
+  Column                       Negative rows   %       Treatment
+  ---------------------------  -------------   ------  ---------
+  AMT_BALANCE                  1,967           0.08%   Cap at 0
+  AMT_RECEIVABLE_PRINCIPAL     2,041           0.09%   Cap at 0
+  AMT_RECIVABLE                52,464          2.23%   Cap at 0
+  AMT_TOTAL_RECEIVABLE         52,464          2.23%   Cap at 0
+
+  Note: AMT_RECIVABLE and AMT_TOTAL_RECEIVABLE have more
+        negatives — likely credit adjustments or fee reversals.
+
+Key column descriptions:
+  AMT_BALANCE              — current card balance
+  AMT_CREDIT_LIMIT_ACTUAL  — current credit limit
+  AMT_DRAWINGS_ATM_CURRENT — ATM cash withdrawals this month
+  AMT_DRAWINGS_CURRENT     — total drawings this month
+  AMT_DRAWINGS_POS_CURRENT — POS drawings this month
+  AMT_INST_MIN_REGULARITY  — minimum required payment
+  AMT_PAYMENT_CURRENT      — actual payment this month
+  AMT_PAYMENT_TOTAL_CURRENT— total payment including fees
+  AMT_RECEIVABLE_PRINCIPAL — principal outstanding
+  AMT_RECIVABLE            — total receivable (typo in source)
+  AMT_TOTAL_RECEIVABLE     — total receivable including fees
+  CNT_DRAWINGS_*           — count of drawing transactions
+  CNT_INSTALMENT_MATURE_CUM— cumulative mature instalments
+
+Winsorisation required:
+  AMT_BALANCE              — 99th pct
+  AMT_CREDIT_LIMIT_ACTUAL  — 99th pct
+  AMT_DRAWINGS_ATM_CURRENT — 99th pct (157,500)
+  AMT_DRAWINGS_CURRENT     — 99th pct
+  AMT_PAYMENT_CURRENT      — 99th pct
+  SK_DPD                   — 99th pct (184)
+
+----------------------------------------------------------------
+10. PHASE 4 FEATURE ENGINEERING PLAN — CREDIT_CARD_BALANCE
+----------------------------------------------------------------
+Aggregation grain: SK_ID_PREV first → then SK_ID_CURR
+
+A. Utilisation features (mandatory)
+   FLAG_EVER_OVER_LIMIT         — any month over credit limit
+   FLAG_EVER_HIGH_UTIL          — any month >90% utilisation
+   MAX_UTILISATION              — worst utilisation ever
+   MEAN_UTILISATION             — average utilisation lifetime
+   MEAN_UTILISATION_LAST_12M    — average utilisation last 12M
+   COUNT_MONTHS_OVER_LIMIT      — months over credit limit
+   COUNT_MONTHS_HIGH_UTIL       — months >90% utilisation
+
+B. Payment behaviour features (mandatory)
+   FLAG_MIN_PAYMENT_ONLY        — ever paid only minimum
+   COUNT_MONTHS_MIN_PAYMENT     — months paying minimum only
+   PAYMENT_VS_MIN_RATIO         — payment / minimum required
+   MEAN_PAYMENT_VS_MIN_LAST_12M — recent payment trend
+
+C. ATM drawing features (mandatory)
+   FLAG_EVER_ATM_DRAWING        — any ATM cash withdrawal
+   SUM_AMT_DRAWINGS_ATM         — total ATM drawings
+   COUNT_MONTHS_ATM_DRAWING     — months with ATM drawings
+   ATM_TO_TOTAL_DRAWING_RATIO   — ATM / total drawings
+
+D. DPD features (mandatory)
+   FLAG_EVER_DPD                — any SK_DPD > 0
+   FLAG_EVER_DPD_DEF            — any SK_DPD_DEF > 0
+   MAX_DPD                      — worst DPD ever
+   MAX_DPD_LAST_3M              — worst DPD last 3 months
+   MAX_DPD_LAST_12M             — worst DPD last 12 months
+   COUNT_MONTHS_DPD             — months with any DPD
+
+E. Balance & limit features
+   MEAN_AMT_BALANCE             — average balance
+   MEAN_AMT_BALANCE_LAST_12M    — average balance last 12M
+   MAX_AMT_BALANCE              — peak balance
+   MEAN_CREDIT_LIMIT            — average credit limit
+   BALANCE_TREND                — is balance increasing?
+
+F. Drawing behaviour features
+   MEAN_AMT_DRAWINGS_CURRENT    — average monthly drawings
+   COUNT_MONTHS_WITH_DRAWINGS   — months with any activity
+   DRAWING_TO_LIMIT_RATIO       — drawings / credit limit
+
+G. Coverage feature
+   FLAG_HAS_CREDIT_CARD         — has any credit card record
+
+H. Recency windows
+   Apply LAST_3M / LAST_6M / LAST_12M / LAST_24M filters
+   to all DPD, utilisation, and payment features
+
+----------------------------------------------------------------
+11. PHASE 5 TREATMENT SUMMARY
+----------------------------------------------------------------
+
+Action                    Columns
+------------------------  ------------------------------------
+Cap at 0                  AMT_BALANCE (negatives)
+                          AMT_RECEIVABLE_PRINCIPAL (negatives)
+                          AMT_RECIVABLE (negatives)
+                          AMT_TOTAL_RECEIVABLE (negatives)
+                          UTILISATION (negatives)
+Winsorise at 99th pct     AMT_BALANCE, AMT_CREDIT_LIMIT_ACTUAL
+                          AMT_DRAWINGS_ATM_CURRENT (157,500)
+                          AMT_DRAWINGS_CURRENT
+                          AMT_PAYMENT_CURRENT
+                          SK_DPD (184)
+Treat as binary           SK_DPD_DEF (99th pct = 1)
+Impute with 0             Drawing columns (22.13% missing)
+                          Missing = no drawing activity
+Separate WoE missing bin  AMT_PAYMENT_CURRENT (22.89%)
+                          CNT_INSTALMENT_MATURE_CUM (8.41%)
+                          AMT_INST_MIN_REGULARITY (8.41%)
+Group rare categories     NAME_CONTRACT_STATUS:
+                          Approved/Demand/Sent proposal → Other
+
+----------------------------------------------------------------
+12. KEY INSIGHTS FOR MODEL DEVELOPMENT
+----------------------------------------------------------------
+
+1. OVER LIMIT is the strongest signal in this table (+4.74pp).
+   FLAG_EVER_OVER_LIMIT is a mandatory Phase 4 feature.
+   Exceeding credit limit = direct financial distress signal.
+
+2. HIGH UTILISATION (+3.71pp) — approaching the limit is
+   nearly as predictive as exceeding it. Both together give
+   a utilisation risk spectrum for WoE binning.
+
+3. ATM DRAWINGS (+3.34pp) — cash withdrawals from a credit
+   card signal emergency financial need. Most expensive card
+   usage type. FLAG_EVER_ATM_DRAWING is mandatory.
+
+4. MINIMUM PAYMENT ONLY (+2.36pp) — 23.60% of records show
+   minimum-only payments. Debt trap signal — interest only,
+   no principal reduction.
+
+5. Credit card DPD is more extreme than POS_CASH DPD
+   (99th pct 184 vs 16). When credit card delinquency occurs
+   it is more severe than POS loan delinquency.
+
+6. UTILISATION distribution is bimodal — median of 0.039
+   but 20.37% >90%. Two distinct populations: low users
+   and near-limit stressed borrowers.
+
+7. Coverage is only 25.3% — 74.7% of applicants have no
+   credit card history with Home Credit. Missing features
+   after aggregation impute with 0 (no card = no signal).
+
+8. NAME_CONTRACT_STATUS is 97% Active — minimal variation.
+   Expected to screen out on low IV in Phase 5.
+
+9. UTILISATION = AMT_BALANCE / AMT_CREDIT_LIMIT_ACTUAL is
+   the single most important engineered ratio in this table.
+   Must be computed before aggregation in Phase 4.
+   Handle zero credit limits with NaN replacement before
+   division to avoid inf values.
+
+================================================================
+END OF CREDIT_CARD_BALANCE EDA FINDINGS
+================================================================
