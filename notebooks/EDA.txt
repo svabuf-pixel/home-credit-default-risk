@@ -2243,3 +2243,449 @@ Group rare categories     NAME_CONTRACT_STATUS:
 ================================================================
 END OF CREDIT_CARD_BALANCE EDA FINDINGS
 ================================================================
+
+
+================================================================
+PHASE 2 - STEP 5: ZERO / NEAR-ZERO VARIANCE CHECK
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: application_train (307,511 rows)
+Threshold: dominant value > 99% of rows
+
+----------------------------------------------------------------
+1. ZERO VARIANCE CHECK
+----------------------------------------------------------------
+Result: ✅ No zero variance columns found in application_train
+
+----------------------------------------------------------------
+2. NEAR-ZERO VARIANCE CHECK RESULTS
+----------------------------------------------------------------
+20 columns flagged with dominant value > 99%
+
+Column                          Dominant   Dom %    Minority n
+------------------------------  ---------  -------  ----------
+FLAG_MOBIL                      1          100.00%  0
+FLAG_DOCUMENT_2                 0          100.00%  0
+FLAG_DOCUMENT_10                0          100.00%  0
+FLAG_DOCUMENT_12                0          100.00%  0
+FLAG_DOCUMENT_4                 0          99.99%   25
+FLAG_DOCUMENT_7                 0          99.98%   59
+FLAG_DOCUMENT_17                0          99.97%   82
+FLAG_DOCUMENT_21                0          99.97%   103
+FLAG_DOCUMENT_19                0          99.94%   183
+FLAG_DOCUMENT_20                0          99.95%   156
+FLAG_DOCUMENT_15                0          99.88%   372
+FLAG_CONT_MOBILE                1          99.81%   574
+FLAG_DOCUMENT_14                0          99.71%   903
+FLAG_DOCUMENT_9                 0          99.61%   1,198
+FLAG_DOCUMENT_11                0          99.61%   1,203
+FLAG_DOCUMENT_13                0          99.65%   1,084
+FLAG_DOCUMENT_18                0          99.19%   2,500
+FLAG_DOCUMENT_16                0          99.01%   3,053
+AMT_REQ_CREDIT_BUREAU_DAY       0.0        99.44%   43,008
+AMT_REQ_CREDIT_BUREAU_HOUR      0.0        99.39%   43,145
+
+----------------------------------------------------------------
+3. BAD RATE ANALYSIS — MINORITY POPULATION
+----------------------------------------------------------------
+Key: does the minority value carry predictive signal?
+     If yes → keep despite near-zero variance
+     If no  → drop at Phase 5 screening gate
+
+Column                          Min n    Maj Bad%  Min Bad%  Diff
+------------------------------  -------  --------  --------  ------
+FLAG_MOBIL                      0        -         -         N/A (constant)
+FLAG_DOCUMENT_2                 0        -         -         N/A (constant)
+FLAG_DOCUMENT_10                0        -         -         N/A (constant)
+FLAG_DOCUMENT_12                0        -         -         N/A (constant)
+FLAG_DOCUMENT_4                 25       8.07%     0.00%     -8.07pp *
+FLAG_DOCUMENT_7                 59       8.07%     5.08%     -2.99pp *
+FLAG_DOCUMENT_17                82       8.07%     2.44%     -5.64pp *
+FLAG_DOCUMENT_21                103      8.07%     13.59%    +5.52pp *
+FLAG_DOCUMENT_19                183      8.07%     6.56%     -1.52pp *
+FLAG_DOCUMENT_20                156      8.07%     8.33%     +0.26pp
+FLAG_CONT_MOBILE                574      8.07%     7.84%     -0.23pp
+FLAG_DOCUMENT_15                372      8.08%     2.96%     -5.12pp
+FLAG_DOCUMENT_14                903      8.09%     3.32%     -4.76pp
+FLAG_DOCUMENT_9                 1,198    8.08%     6.18%     -1.90pp
+FLAG_DOCUMENT_11                1,203    8.08%     6.23%     -1.85pp
+FLAG_DOCUMENT_13                1,084    8.09%     2.77%     -5.32pp
+FLAG_DOCUMENT_18                2,500    8.09%     5.68%     -2.41pp
+FLAG_DOCUMENT_16                3,053    8.10%     4.91%     -3.19pp
+AMT_REQ_CREDIT_BUREAU_DAY       43,008   7.71%     10.31%    +2.60pp
+AMT_REQ_CREDIT_BUREAU_HOUR      43,145   7.72%     10.25%    +2.53pp
+
+* = statistically unreliable due to very small minority count
+
+----------------------------------------------------------------
+4. DECISIONS
+----------------------------------------------------------------
+
+A. DROP — Constant (100% single value)
+   These columns have zero predictive power.
+   Column               Reason
+   -------------------  ----------------------------------
+   FLAG_MOBIL           100% = 1 — effectively constant
+   FLAG_DOCUMENT_2      100% = 0 — effectively constant
+   FLAG_DOCUMENT_10     100% = 0 — effectively constant
+   FLAG_DOCUMENT_12     100% = 0 — effectively constant
+
+B. DROP — Near-constant with no signal
+   Near-zero variance AND negligible bad rate differential.
+   Column               Dom %    Diff    Reason
+   -------------------  -------  ------  ----------------------
+   FLAG_CONT_MOBILE     99.81%   -0.23pp No meaningful signal
+   FLAG_DOCUMENT_20     99.95%   +0.26pp No meaningful signal
+   FLAG_DOCUMENT_4      99.99%   -8.07pp Strong diff BUT only
+                                         25 minority rows —
+                                         statistically unreliable
+
+C. KEEP — Near-constant but meaningful signal
+   Despite low variance these carry genuine predictive signal
+   with sufficient minority population.
+   Column                    Dom %    Min n    Diff
+   ------------------------  -------  -------  --------
+   AMT_REQ_CREDIT_BUREAU_HOUR 99.39%  43,145   +2.53pp
+   AMT_REQ_CREDIT_BUREAU_DAY  99.44%  43,008   +2.60pp
+   FLAG_DOCUMENT_9            99.61%  1,198    -1.90pp
+   FLAG_DOCUMENT_11           99.61%  1,203    -1.85pp
+   FLAG_DOCUMENT_13           99.65%  1,084    -5.32pp
+   FLAG_DOCUMENT_14           99.71%  903      -4.76pp
+   FLAG_DOCUMENT_15           99.88%  372      -5.12pp
+   FLAG_DOCUMENT_16           99.01%  3,053    -3.19pp
+   FLAG_DOCUMENT_18           99.19%  2,500    -2.41pp
+
+D. PHASE 5 IV GATE — Borderline (small minority + signal)
+   Strong bad rate differential but minority too small to
+   be statistically reliable. WoE bin may be unstable.
+   Let IV screening and bin stability decide in Phase 5.
+   Column               Dom %    Min n    Diff
+   -------------------  -------  -------  --------
+   FLAG_DOCUMENT_7      99.98%   59       -2.99pp
+   FLAG_DOCUMENT_17     99.97%   82       -5.64pp
+   FLAG_DOCUMENT_19     99.94%   183      -1.52pp
+   FLAG_DOCUMENT_21     99.97%   103      +5.52pp
+
+----------------------------------------------------------------
+5. CHILD TABLE FINDINGS (already identified in Steps 3-4)
+----------------------------------------------------------------
+Two child table columns flagged for near-zero variance:
+
+CREDIT_CURRENCY (bureau table)
+  Dominant value : currency 1 — 99.9% of records
+  Decision       : Expected to screen out on IV in Phase 5
+                   Do NOT use as aggregation feature
+
+NFLAG_LAST_APPL_IN_DAY (previous_application table)
+  Dominant value : 1 — 99.98% of records
+  Decision       : Drop — near-constant, no aggregation value
+
+----------------------------------------------------------------
+6. SUMMARY
+----------------------------------------------------------------
+
+Total columns checked      : All numeric + categorical + binary
+                             in application_train
+
+Zero variance              : 0 columns
+Near-zero variance flagged : 20 columns
+
+Final decisions:
+  Drop immediately    : 7 columns
+                        (FLAG_MOBIL, FLAG_DOCUMENT_2,
+                         FLAG_DOCUMENT_4, FLAG_DOCUMENT_10,
+                         FLAG_DOCUMENT_12, FLAG_CONT_MOBILE,
+                         FLAG_DOCUMENT_20)
+  Keep with signal    : 9 columns
+  Phase 5 IV gate     : 4 columns
+  Child table drops   : 2 columns
+                        (CREDIT_CURRENCY, NFLAG_LAST_APPL_IN_DAY)
+
+Note: No columns are physically removed at this stage.
+      Drops are executed at the Phase 5 screening gate
+      alongside IV filtering. This keeps the process
+      auditable — all decisions documented here first.
+
+----------------------------------------------------------------
+7. CONTEXT — WHY VARIANCE MATTERS IN CREDIT RISK
+----------------------------------------------------------------
+
+Zero/near-zero variance columns are removed because:
+
+1. No predictive power — cannot distinguish defaulters from
+   non-defaulters if everyone has the same value
+
+2. WoE/IV impact — near-constant columns produce near-zero
+   IV and screen out in Phase 5 anyway — better to catch
+   them explicitly here
+
+3. Model stability — near-constant columns can cause issues
+   in logistic regression (separation problems) and inflate
+   feature importance in tree models
+
+4. Regulatory audit — a credit risk model should only include
+   features with documented predictive justification.
+   Near-constant features would raise questions in model
+   validation
+
+Key finding: Several FLAG_DOCUMENT_* columns have strong
+protective signals despite near-zero variance (e.g.
+FLAG_DOCUMENT_13 at -5.32pp). This demonstrates that
+near-zero variance does NOT automatically mean no signal —
+bad rate analysis is always required before dropping.
+
+================================================================
+END OF STEP 5 FINDINGS
+================================================================
+
+================================================================
+PHASE 2 - STEP 9: DATA LEAKAGE SCAN
+================================================================
+Date: 2026-05-30
+Dataset: Home Credit Default Risk
+Table: application_train (307,511 rows, 122 columns)
+
+----------------------------------------------------------------
+1. STATISTICAL LEAKAGE CHECK
+----------------------------------------------------------------
+Method: Absolute correlation of every numeric feature with TARGET
+Threshold: Any correlation > 0.5 flagged for investigation
+
+Results:
+  Highest correlation with TARGET:
+  EXT_SOURCE_3                   0.179
+  EXT_SOURCE_2                   0.161
+  EXT_SOURCE_1                   0.155
+  DAYS_BIRTH                     0.078
+  REGION_RATING_CLIENT_W_CITY    0.061
+  REGION_RATING_CLIENT           0.059
+  DAYS_LAST_PHONE_CHANGE         0.055
+  DAYS_ID_PUBLISH                0.051
+  REG_CITY_NOT_WORK_CITY         0.051
+  DAYS_EMPLOYED                  0.045
+
+  Suspiciously high correlation (>0.5): NONE FOUND
+  Only TARGET itself shows correlation > 0.5 (1.000)
+
+Conclusion: ✅ No statistical leakage detected
+  Maximum legitimate feature correlation = 0.179 (EXT_SOURCE_3)
+  This is expected and healthy for a credit risk dataset.
+  Individual features rarely correlate strongly with default.
+  Predictive power comes from combining many weak signals.
+
+----------------------------------------------------------------
+2. STRUCTURAL LEAKAGE CHECK
+----------------------------------------------------------------
+Method: Keyword scan for post-decision column names
+Keywords: default, overdue, late, dpd, delinquent, write,
+          loss, recovery, collection, bad, npl
+
+Result: ✅ No post-decision columns found (0 suspicious columns)
+
+Confirmed application-time features:
+  DAYS_BIRTH             — age at application time
+  DAYS_EMPLOYED          — employment duration at application
+  DAYS_REGISTRATION      — days since registration at application
+  DAYS_ID_PUBLISH        — days since ID published at application
+  DAYS_LAST_PHONE_CHANGE — days since last phone change
+  EXT_SOURCE_1/2/3       — external credit scores at application
+  All AMT_* columns      — amounts at application time
+  All FLAG_* columns     — flags at application time
+
+----------------------------------------------------------------
+3. KEY COLUMNS EXCLUDED AS FEATURES
+----------------------------------------------------------------
+SK_ID_CURR — primary key, never a feature
+TARGET     — outcome variable, not a feature
+
+----------------------------------------------------------------
+4. CHILD TABLE LEAKAGE — ALREADY CONFIRMED
+----------------------------------------------------------------
+All child tables filtered to application_train SK_ID_CURR only:
+  ✅ bureau           — filtered by SK_ID_CURR
+  ✅ bureau_balance   — filtered via bureau SK_ID_BUREAU
+  ✅ previous_application — filtered by SK_ID_CURR
+  ✅ POS_CASH_balance — filtered via previous_application SK_ID_PREV
+  ✅ installments_payments — filtered via previous_application
+  ✅ credit_card_balance   — filtered via previous_application
+
+No test set applicants included in any child table filter.
+
+----------------------------------------------------------------
+5. PROCEDURAL LEAKAGE RISKS — DEFERRED TO PHASE 7
+----------------------------------------------------------------
+These are not data leakage issues but pipeline leakage risks.
+They must be handled during cross-validation in Phase 7:
+
+Risk 1: WoE/IV computation
+  WRONG: Compute WoE on full training set, then CV
+  RIGHT: Compute WoE inside each CV fold on train fold only
+  Why: WoE uses TARGET — computing on full data leaks outcome
+
+Risk 2: Target encoding
+  WRONG: Target encode on full training set, then CV
+  RIGHT: Target encode inside each CV fold on train fold only
+  Why: Same reason as WoE — uses TARGET directly
+
+Risk 3: Imputation statistics
+  WRONG: Compute mean/median on full data, impute, then CV
+  RIGHT: Compute imputation stats on train fold, apply to val fold
+  Why: Minor leakage but best practice for clean evaluation
+
+================================================================
+PHASE 2 - STEP 10: FEATURE INVENTORY ARTIFACT
+================================================================
+
+----------------------------------------------------------------
+1. INVENTORY OVERVIEW
+----------------------------------------------------------------
+File location : data/processed/feature_inventory.csv
+Total features: 120 (excludes TARGET and SK_ID_CURR)
+Source table  : application_train only
+               (child table features added in Phase 4)
+
+Columns in inventory:
+  feature        — column name
+  source_table   — origin table
+  dtype          — pandas data type
+  n_unique       — number of unique values
+  missing_pct    — % missing values
+  bad_rate_diff  — predictive signal measure
+                   (correlation for numeric, max-min bad rate
+                    for categorical)
+  leakage_flag   — Yes/No
+  variance_flag  — Yes/No (flagged in Step 5)
+  treatment      — Phase 4/5 action
+
+----------------------------------------------------------------
+2. MISSING RATE DISTRIBUTION
+----------------------------------------------------------------
+Bucket          Count   Columns
+--------------  ------  ------------------------------------
+0% complete     57      Core application features
+<5%             6       AMT_GOODS_PRICE, EXT_SOURCE_2 etc.
+5-20%           7       EXT_SOURCE_3, AMT_REQ_CREDIT_* etc.
+20-50%          9       EXT_SOURCE_1, OWN_CAR_AGE,
+                        OCCUPATION_TYPE etc.
+>50%            41      All building stats (_AVG/_MODE/_MEDI)
+
+----------------------------------------------------------------
+3. VARIANCE FLAG SUMMARY
+----------------------------------------------------------------
+Total flagged   : 20 columns
+Zero variance   : 0 columns
+Near-zero (>99%): 20 columns
+
+Drop immediately : 7 columns
+  FLAG_MOBIL, FLAG_DOCUMENT_2, FLAG_DOCUMENT_4,
+  FLAG_DOCUMENT_10, FLAG_DOCUMENT_12,
+  FLAG_CONT_MOBILE, FLAG_DOCUMENT_20
+
+Keep with signal : 9 columns
+  AMT_REQ_CREDIT_BUREAU_HOUR, AMT_REQ_CREDIT_BUREAU_DAY,
+  FLAG_DOCUMENT_9, FLAG_DOCUMENT_11, FLAG_DOCUMENT_13,
+  FLAG_DOCUMENT_14, FLAG_DOCUMENT_15, FLAG_DOCUMENT_16,
+  FLAG_DOCUMENT_18
+
+Phase 5 IV gate  : 4 columns
+  FLAG_DOCUMENT_7, FLAG_DOCUMENT_17,
+  FLAG_DOCUMENT_19, FLAG_DOCUMENT_21
+
+----------------------------------------------------------------
+4. TREATMENT SUMMARY
+----------------------------------------------------------------
+Treatment                                          Count
+-------------------------------------------------  -----
+Separate WoE missing bin — structural (50-70%)     47
+Review in Phase 5 (IV screening)                   33
+DROP — constant/near-constant/no signal            7
+Convert to positive days/years in Phase 4          4
+Separate WoE missing bin — informative/other       2
+Median imputation in Phase 5                       2
+Winsorise at 99th pct in Phase 5                   4
+Replace sentinel with NaN in Phase 5               2
+Replace sentinel + create FLAG in Phase 4          2
+Already normalized — do NOT rescale                3
+Keep XNA as valid WoE bin                          1
+Keep — protective signal                           9
+
+----------------------------------------------------------------
+5. TOP PREDICTORS BY BAD RATE DIFFERENTIAL
+----------------------------------------------------------------
+Feature                      Bad Rate Diff   Type
+---------------------------  -------------   -----------
+NAME_INCOME_TYPE             40.00pp         Categorical
+ORGANIZATION_TYPE            12.63pp         Categorical
+OCCUPATION_TYPE              12.32pp         Categorical
+CODE_GENDER                  10.14pp         Categorical
+NAME_EDUCATION_TYPE           9.10pp         Categorical
+NAME_FAMILY_STATUS            9.94pp         Categorical
+EXT_SOURCE_3                  0.179 corr     Numeric
+EXT_SOURCE_2                  0.161 corr     Numeric
+EXT_SOURCE_1                  0.155 corr     Numeric
+DAYS_BIRTH                    0.078 corr     Numeric
+
+----------------------------------------------------------------
+6. PHASE 4 ACTIONS REQUIRED
+----------------------------------------------------------------
+Before any feature engineering, apply these transformations
+to application_train:
+
+A. Sentinel replacements
+   DAYS_EMPLOYED: replace 365,243 → NaN
+                  create FLAG_EMPLOYED_SENTINEL
+   OWN_CAR_AGE:   replace 64 → NaN
+                  create FLAG_OWN_CAR_AGE_SENTINEL
+
+B. DAYS column conversions (negative → positive)
+   DAYS_BIRTH             → AGE_YEARS = abs(DAYS_BIRTH) / 365
+   DAYS_EMPLOYED          → EMPLOYED_YEARS = abs(DAYS_EMPLOYED) / 365
+   DAYS_REGISTRATION      → REGISTRATION_DAYS = abs(DAYS_REGISTRATION)
+   DAYS_ID_PUBLISH        → ID_PUBLISH_DAYS = abs(DAYS_ID_PUBLISH)
+   DAYS_LAST_PHONE_CHANGE → PHONE_CHANGE_DAYS = abs(DAYS_LAST_PHONE_CHANGE)
+
+C. Columns to drop immediately
+   FLAG_MOBIL, FLAG_DOCUMENT_2, FLAG_DOCUMENT_4,
+   FLAG_DOCUMENT_10, FLAG_DOCUMENT_12,
+   FLAG_CONT_MOBILE, FLAG_DOCUMENT_20
+
+----------------------------------------------------------------
+7. PHASE 5 ACTIONS REQUIRED
+----------------------------------------------------------------
+A. Winsorisation (cap at 99th percentile)
+   AMT_INCOME_TOTAL (472,500), AMT_CREDIT (1,854,000),
+   AMT_ANNUITY (70,006), AMT_GOODS_PRICE (1,800,000),
+   CNT_CHILDREN, CNT_FAM_MEMBERS
+
+B. Sentinel/special value replacements
+   CODE_GENDER: XNA → NaN
+   NAME_FAMILY_STATUS: Unknown → NaN
+   ORGANIZATION_TYPE: keep XNA as valid category
+
+C. Imputation
+   Median: EXT_SOURCE_2, AMT_GOODS_PRICE,
+           CNT_FAM_MEMBERS, DAYS_LAST_PHONE_CHANGE
+   WoE missing bin: EXT_SOURCE_1, EXT_SOURCE_3,
+                    OCCUPATION_TYPE, NAME_TYPE_SUITE,
+                    all building stats (_AVG/_MODE/_MEDI)
+
+D. IV screening gate
+   All 33 "Review in Phase 5" columns screened by IV
+   Standard bands: <0.02 drop, 0.02-0.1 weak,
+   0.1-0.3 medium, 0.3-0.5 strong, >0.5 investigate
+
+----------------------------------------------------------------
+8. INVENTORY FILE LOCATION
+----------------------------------------------------------------
+Path: data/processed/feature_inventory.csv
+Format: CSV, 120 rows x 9 columns
+Note: This inventory covers application_train only.
+      Child table aggregated features will be appended
+      to this inventory after Phase 4 feature engineering.
+      The final inventory (Phase 5 input) will cover all
+      features from all tables at the SK_ID_CURR grain.
+
+================================================================
+END OF STEP 9 & STEP 10 FINDINGS
+================================================================

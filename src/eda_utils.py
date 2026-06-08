@@ -263,3 +263,47 @@ def categorical_analysis(df, categorical_cols, target_col="TARGET"):
         rare = summary[summary["Pct %"] < 5].index.tolist()
         if rare:
             print(f"  Rare categories (<5%): {', '.join(str(r) for r in rare)}")
+
+def variance_check(df, numeric_cols, categorical_cols, binary_cols, threshold=0.99):
+    """
+    Checks for zero and near-zero variance columns.
+    - Zero variance: only one unique value
+    - Near-zero variance: dominant category > threshold % of rows
+
+    Usage:
+        variance_check(df_train, numeric_data, categorical_data, binary_data)
+    """
+    print(f"{'='*65}")
+    print(f"  ZERO VARIANCE CHECK")
+    print(f"{'='*65}")
+    zero_var = []
+    for col in numeric_cols + categorical_cols + binary_cols:
+        if col in df.columns:
+            if df[col].nunique() == 1:
+                zero_var.append(col)
+                print(f"  🔴 ZERO VARIANCE: {col} — only value: {df[col].unique()[0]}")
+    if not zero_var:
+        print("  ✅ No zero variance columns found")
+
+    print(f"\n{'='*65}")
+    print(f"  NEAR-ZERO VARIANCE CHECK (dominant value > {threshold*100:.0f}%)")
+    print(f"{'='*65}")
+    near_zero = []
+    for col in numeric_cols + categorical_cols + binary_cols:
+        if col in df.columns and df[col].nunique() > 1:
+            top_pct = df[col].value_counts(normalize=True).iloc[0]
+            if top_pct >= threshold:
+                near_zero.append(col)
+                top_val = df[col].value_counts().index[0]
+                print(f"  ⚠️  {col:<45} dominant: {str(top_val):<10} "
+                      f"({top_pct*100:.2f}%)")
+    if not near_zero:
+        print("  ✅ No near-zero variance columns found")
+
+    print(f"\n{'='*65}")
+    print(f"  SUMMARY")
+    print(f"{'='*65}")
+    print(f"  Zero variance    : {len(zero_var)} columns")
+    print(f"  Near-zero variance: {len(near_zero)} columns")
+    print(f"  Total flagged    : {len(zero_var) + len(near_zero)} columns")
+    return zero_var, near_zero
