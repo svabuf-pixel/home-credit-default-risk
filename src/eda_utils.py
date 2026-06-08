@@ -1,12 +1,10 @@
 # =============================================================================
 # eda_utils.py
 # Reusable EDA utility functions for Home Credit Risk Project
-# Phase 3 — Exploratory Data Analysis
+# Phase 2 — Exploratory Data Analysis
 # =============================================================================
 
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
 import seaborn as sns
 
 pd.set_option("display.max_columns", None)

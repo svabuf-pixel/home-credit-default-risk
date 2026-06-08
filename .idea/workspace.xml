@@ -5,9 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3027d839-d7b6-4e26-ae68-2df944dade7d" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/notebooks/03_feature_engineering.ipynb" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/feature_utils.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/notebooks/02_eda.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/notebooks/02_eda.ipynb" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/EDA.txt" beforeDir="false" afterPath="$PROJECT_DIR$/notebooks/EDA.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/eda_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/eda_utils.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
