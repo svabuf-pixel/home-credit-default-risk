@@ -28,7 +28,7 @@ def get_column_lists(df):
     binary = [col for col in df.columns if col.startswith("FLAG_")]
     numeric = [col for col in df.select_dtypes(include=["number"]).columns
                if col not in binary]
-    categorical = [col for col in df.select_dtypes(include=["str", "category"]).columns
+    categorical = [col for col in df.select_dtypes(include=["object", "category"]).columns
                    if df[col].nunique() > 2]
     return numeric, categorical, binary
 

@@ -23,6 +23,7 @@ def replace_sentinels(df):
     """
     df = df.copy()
     df.replace({365243: np.nan, "XNA": np.nan, "Unknown": np.nan}, inplace=True)
+    df["ORGANIZATION_TYPE"] = df["ORGANIZATION_TYPE"].fillna("XNA")
     df["OWN_CAR_AGE"] = df["OWN_CAR_AGE"].replace(64, np.nan)
     return df
 

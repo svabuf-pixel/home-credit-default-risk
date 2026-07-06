@@ -1,4 +1,25 @@
 ================================================================
+NOTE ON PHASE NUMBERING (updated 2026-07-06)
+================================================================
+This document uses the project's CURRENT phase numbering:
+  Phase 1 — Project Setup + Data Ingestion
+  Phase 2 — EDA (this document's findings)
+  Phase 3 — Feature Engineering (COMPLETE — sentinel flags,
+            DAYS conversions, domain ratios, child table
+            aggregations, feature matrix saved)
+  Phase 4 — Feature Matrix Assembly & Preprocessing
+            (missing values, winsorisation, grouping,
+             binning, WoE, IV screening) ← CURRENT PHASE
+  Phase 5 — Multivariate Selection (VARCLUS, VIF)
+  Phase 6+ — Modelling, Evaluation, Explainability,
+             MLflow, Deployment, Documentation
+
+All treatments previously labelled "Phase 5" now read
+"Phase 4". All feature engineering actions previously
+labelled "Phase 4" now read "Phase 3" (already executed).
+================================================================
+
+================================================================
 PHASE 2 EDA - STEP 3: FEATURE TYPING, CARDINALITY & SENTINEL CODES
 ================================================================
 Date: 2026-05-30
@@ -16,19 +37,19 @@ NAME_CONTRACT_TYPE
 CODE_GENDER
   Unique values : 3
   Sentinel      : 'XNA' — 4 rows (~0.001%)
-  Treatment     : Replace with NaN in Phase 5
+  Treatment     : Replace with NaN in Phase 4
   Note          : XNA = gender not available/applicable
 
 NAME_TYPE_SUITE
   Unique values : 8
   Rare categories: Other_A (866 rows, bad rate: 8.78%), Other_B (1,770 rows, bad rate = 9.83%)
-  Treatment     : Group into single 'Other' category in Phase 5
+  Treatment     : Group into single 'Other' category in Phase 4
   Note          : Both are catch-all groups, semantically similar
 
 NAME_FAMILY_STATUS
   Unique values : 6
   Sentinel      : 'Unknown' — 2 rows (~0.001%)
-  Treatment     : Replace with NaN in Phase 5
+  Treatment     : Replace with NaN in Phase 4
 
 ORGANIZATION_TYPE
   Unique values : 58
@@ -50,13 +71,13 @@ EXT_SOURCE_1/2/3
   Min           : 0.015–0.001
   Max           : 0.963–0.855
   Status        : Normalized
-  Treatment     : Do NOT rescale in Phase 5
+  Treatment     : Do NOT rescale in Phase 4
 
 Building stats (_AVG/_MODE/_MEDI)
   Min           : 0.000
   Max           : 1.00
   Status        : Normalized
-  Treatment     : Do NOT rescale in Phase 5
+  Treatment     : Do NOT rescale in Phase 4
 
 
 AMT_INCOME_TOTAL
@@ -64,14 +85,14 @@ AMT_INCOME_TOTAL
   Max           : 117,000,000
   99th pct      : 472,500
   Issue         : Max is ~247x the 99th percentile — confirmed error
-  Treatment     : Winsorise at 99th percentile in Phase 5
+  Treatment     : Winsorise at 99th percentile in Phase 4
 
 AMT_CREDIT
   Skewness      : 1.235 (Highly skewed Right)
   Max           : 4,050,000
   99th pct      : 1,854,000
   Issue         : Max is 2.2x the 99th percentile — heavy tail
-  Treatment     : Winsorise at 99th percentile in Phase 5
+  Treatment     : Winsorise at 99th percentile in Phase 4
 
 AMT_ANNUITY
   Skewness      : 1.580 (Highly skewed Right)
@@ -79,27 +100,27 @@ AMT_ANNUITY
   99th pct      : 70,006.500
   Issue         : Max is 3.7x the 99th percentile — heavy tail
   Rows > 99th   : 3,070 rows (~1% of data — expected)
-  Treatment     : Winsorise at 99th percentile in Phase 5
+  Treatment     : Winsorise at 99th percentile in Phase 4
 
 AMT_GOODS_PRICE
   Skewness      : 1.349 (Highly skewed Right)
   Max           : 4,050,000
   99th pct      : 1,800,000
   Issue         : Max is 2.25x the 99th percentile — heavy tail
-  Treatment     : Winsorise at 99th percentile in Phase 5
+  Treatment     : Winsorise at 99th percentile in Phase 4
 
 CNT_CHILDREN
   Skewness      : 1.975 (Highly skewed Right)
   Max           : 19 (2 rows)
   Issue         : Extreme but plausible in some cultures
-  Treatment     : Winsorise at 99th percentile in Phase 5
+  Treatment     : Winsorise at 99th percentile in Phase 4
 
 CNT_FAM_MEMBERS
   Skewness      : 0.988 (Moderately skewed Right)
   Max           : 20 (2 rows)
   Issue         : Extreme but plausible
   Consistency   : CNT_CHILDREN <= CNT_FAM_MEMBERS — PASSED (0 violations)
-  Treatment     : Winsorise at 99th percentile in Phase 5
+  Treatment     : Winsorise at 99th percentile in Phase 4
 
 OWN_CAR_AGE
   Skewness      : 2.745 (Highly skewed Right)
@@ -109,12 +130,12 @@ OWN_CAR_AGE
   Sentinel      : 64 — 2,443 rows (0.79% of total data)
   Bad rate      : Sentinel (age=64): 8.60% vs Known age: 7.21%
   Treatment     : Replace 64 with NaN + create FLAG_OWN_CAR_AGE_SENTINEL
-                  in Phase 4
+                  in Phase 3
 
 DAYS_BIRTH
   Skewness      : -0.116 (Fairly symmetrical)
   Note          : Negative by design — days before application
-  Treatment     : Convert to positive years in Phase 4
+  Treatment     : Convert to positive years in Phase 3
 
 DAYS_EMPLOYED
   Skewness      : 1.664 (Highly skewed Right)
@@ -123,22 +144,22 @@ DAYS_EMPLOYED
   Bad rate      : Sentinel population: 5.40% vs Employed: 8.66%
   Overlap       : Exact overlap with ORGANIZATION_TYPE XNA (55,374 rows)
   Treatment     : Replace with NaN + create FLAG_EMPLOYED_SENTINEL
-                  in Phase 4
+                  in Phase 3
 
 DAYS_REGISTRATION
   Skewness      : -0.591 (Moderately skewed Left)
   Note          : Negative by design — days before application
-  Treatment     : Convert to positive years in Phase 4
+  Treatment     : Convert to positive years in Phase 3
 
 DAYS_ID_PUBLISH
   Skewness      : 0.349 (Fairly symmetrical)
   Note          : Negative by design — days before application
-  Treatment     : Convert to positive years in Phase 4
+  Treatment     : Convert to positive years in Phase 3
 
 DAYS_LAST_PHONE_CHANGE
   Skewness      : -0.714 (Moderately skewed Left)
   Note          : Negative by design — days before application
-  Treatment     : Convert to positive days in Phase 4
+  Treatment     : Convert to positive days in Phase 3
 
 ----------------------------------------------------------------
 3. SENTINEL CODES CATALOGUE
@@ -146,11 +167,11 @@ DAYS_LAST_PHONE_CHANGE
 
 Column                  Sentinel     Count    % Data   Bad Rate   Treatment
 ----------------------  -----------  -------  -------  ---------  --------------------------
-CODE_GENDER             XNA          4        ~0.001%  -          Replace with NaN (Phase 5)
-NAME_FAMILY_STATUS      Unknown      2        ~0.001%  -          Replace with NaN (Phase 5)
+CODE_GENDER             XNA          4        ~0.001%  -          Replace with NaN (Phase 4)
+NAME_FAMILY_STATUS      Unknown      2        ~0.001%  -          Replace with NaN (Phase 4)
 ORGANIZATION_TYPE       XNA          55,374   18.01%   -          Keep as valid WoE bin
-DAYS_EMPLOYED           365,243      55,374   18.01%   5.40%      Replace NaN + FLAG (Phase 4)
-OWN_CAR_AGE             64           2,443    0.79%    8.60%      Replace NaN + FLAG (Phase 4)
+DAYS_EMPLOYED           365,243      55,374   18.01%   5.40%      Replace NaN + FLAG (Phase 3)
+OWN_CAR_AGE             64           2,443    0.79%    8.60%      Replace NaN + FLAG (Phase 3)
 
 ----------------------------------------------------------------
 4. OUTLIERS CATALOGUE
@@ -185,7 +206,7 @@ DAYS_EMPLOYED sentinel == ORG_TYPE XNA   PASSED — exact overlap (55,374 rows)
 
 2. OWN_CAR_AGE sentinel bad rate (8.60%) is HIGHER than known age
    (7.21%) — unknown car age signals lower wealth and higher risk.
-   FLAG_OWN_CAR_AGE_SENTINEL should be created in Phase 4.
+   FLAG_OWN_CAR_AGE_SENTINEL should be created in Phase 3.
 
 3. ORGANIZATION_TYPE XNA and DAYS_EMPLOYED sentinel are the SAME
    population — monitor for multicollinearity in Phase 6 VIF check.
@@ -212,7 +233,7 @@ TREATMENT TYPES LEGEND
 Type 1 — Informative missingness    → Separate WoE missing bin
 Type 2 — Structural missingness     → Separate WoE missing bin
 Type 3 — Random/low missingness     → Median/mode imputation
-Type 4 — High missing + review      → Flag for IV screening Phase 5
+Type 4 — High missing + review      → Flag for IV screening Phase 4
 
 ----------------------------------------------------------------
 1. HIGH MISSING (>40%) — BUILDING / PROPERTY STATS
@@ -221,7 +242,7 @@ All columns below are STRUCTURAL missingness (Type 2)
 Reason: Only populated for applicants in apartment blocks
         where Home Credit had property data.
         Missing = lives in house / rural / no property data.
-Treatment: Separate WoE missing bin in Phase 5
+Treatment: Separate WoE missing bin in Phase 4
 
 Column                          Missing %
 ------------------------------  ---------
@@ -254,7 +275,7 @@ EXT_SOURCE_1
   Type          : 1 — Informative
   Bad rate miss : 8.52% vs present: 7.50% (+1.02pp)
   Reason        : Thin-file customers — no external credit history
-  Treatment     : Separate WoE missing bin in Phase 5
+  Treatment     : Separate WoE missing bin in Phase 4
   Note          : Despite high missingness keep — strong predictor
 
 EXT_SOURCE_3
@@ -262,20 +283,20 @@ EXT_SOURCE_3
   Type          : 1 — Informative
   Bad rate miss : 9.31% vs present: 7.77% (+1.54pp)
   Reason        : Thin-file customers — no external credit history
-  Treatment     : Separate WoE missing bin in Phase 5
+  Treatment     : Separate WoE missing bin in Phase 4
 
 OWN_CAR_AGE
   Missing %     : 65.99%
   Type          : 1 — Informative
   Reason        : Missing = does not own a car
-  Treatment     : Separate WoE missing bin in Phase 5
+  Treatment     : Separate WoE missing bin in Phase 4
   Note          : Sentinel 64 also found — replace with NaN first
 
 OCCUPATION_TYPE
   Missing %     : 31.35%
   Type          : 1 — Informative
   Reason        : Missing = unemployed / occupation not recorded
-  Treatment     : Separate WoE missing bin in Phase 5
+  Treatment     : Separate WoE missing bin in Phase 4
 
 ----------------------------------------------------------------
 3. MEDIUM MISSING (10–40%)
@@ -285,7 +306,7 @@ AMT_REQ_CREDIT_BUREAU_HOUR/WEEK/MON/YEAR
   Missing %     : 13.50% each
   Type          : 1 — Informative
   Reason        : Missing = no credit bureau enquiries recorded
-  Treatment     : Separate WoE missing bin in Phase 5
+  Treatment     : Separate WoE missing bin in Phase 4
   Note          : Missing = no bureau activity — risk signal
 
 ----------------------------------------------------------------
@@ -344,7 +365,7 @@ Key predictors missing  4 cols   Separate WoE missing bin
 ----------------------------------------------------------------
 
 1. Building stats (~50-70% missing) — DO NOT DROP based on
-   missingness alone. Let IV screening in Phase 5 decide.
+   missingness alone. Let IV screening in Phase 4 decide.
    Missing bin = "does not live in apartment block" segment.
 
 2. EXT_SOURCE_1 (56% missing) — KEEP despite high missingness.
@@ -411,7 +432,7 @@ Rows per applicant distribution:
   75th   : 8 rows
   Max    : 116 rows (SK_ID_CURR 120860 — legitimate heavy borrower)
 
-Phase 4 action:
+Phase 3 action:
   → Create FLAG_NO_BUREAU_HISTORY = 1 for thin-file applicants
 
 ----------------------------------------------------------------
@@ -433,7 +454,7 @@ AMT_CREDIT_SUM_LIMIT     33.42%      Structural    Separate WoE missing bin
 AMT_CREDIT_SUM_DEBT      15.22%      Mixed         Fill with 0 where
                                                    CREDIT_ACTIVE = Closed,
                                                    separate bin otherwise
-DAYS_CREDIT_ENDDATE      6.08%       Random        Median imputation Phase 5
+DAYS_CREDIT_ENDDATE      6.08%       Random        Median imputation Phase 4
 
 ----------------------------------------------------------------
 4. NUMERIC COLUMNS — SKEWNESS & OUTLIERS
@@ -443,7 +464,7 @@ DAYS_CREDIT
   Skewness    : -0.578 (Moderately skewed Left)
   Range       : -2,922 to 0 (negative = before application)
   Meaning     : Days before application when bureau credit was opened
-  Note        : Convert to positive days in Phase 4
+  Note        : Convert to positive days in Phase 3
   Treatment   : No outlier issues
 
 CREDIT_DAY_OVERDUE
@@ -454,30 +475,30 @@ CREDIT_DAY_OVERDUE
   Ever overdue: 3,706 rows (0.25% of bureau credits)
   Bad rate    : Currently overdue = 18.21% vs not overdue = 7.79%
   Difference  : +10.42pp ← STRONGEST SIGNAL IN BUREAU TABLE
-  Phase 4     : → Create FLAG_EVER_OVERDUE (mandatory feature)
-  Phase 5     : → Winsorise at 99th percentile
+  Phase 3     : → Create FLAG_EVER_OVERDUE (mandatory feature)
+  Phase 4     : → Winsorise at 99th percentile
 
 DAYS_CREDIT_ENDDATE
   Skewness    : 5.145 (Highly skewed Right)
   Range       : -42,060 to +31,199
   Note        : Positive = credit end date is in the future
                 Negative = credit has already ended
-  Treatment   : Convert to meaningful recency feature in Phase 4
+  Treatment   : Convert to meaningful recency feature in Phase 3
 
 DAYS_ENDDATE_FACT
   Skewness    : -0.795 (Moderately skewed Left)
   Range       : -42,023 to 0
   Note        : Negative = days before application when credit closed
                 Missing = credit still active (structural)
-  Treatment   : Convert to positive days in Phase 4
+  Treatment   : Convert to positive days in Phase 3
 
 AMT_CREDIT_MAX_OVERDUE
   Skewness    : 444.725 (Highly skewed Right) ← EXTREME
   Max         : 115,987,185 (extreme outlier)
   75th pct    : 0 (most credits never had overdue amount)
   Missing     : 64.73% (informative — never overdue)
-  Phase 5     : → Winsorise at 99th percentile
-  Phase 4     : → Use as aggregation input (max overdue ever)
+  Phase 4     : → Winsorise at 99th percentile
+  Phase 3     : → Use as aggregation input (max overdue ever)
 
 CNT_CREDIT_PROLONG
   Skewness    : 19.108 (Highly skewed Right)
@@ -485,48 +506,48 @@ CNT_CREDIT_PROLONG
   Ever prolonged: 8,820 rows (0.60%)
   Bad rate    : Ever prolonged = 8.73% vs never = 7.81%
   Difference  : +0.92pp (weak binary signal)
-  Decision    : Weak as binary flag — aggregate as COUNT in Phase 4
-                Let IV screening decide in Phase 5
+  Decision    : Weak as binary flag — aggregate as COUNT in Phase 3
+                Let IV screening decide in Phase 4
 
 AMT_CREDIT_SUM
   Skewness    : 66.794 (Highly skewed Right) ← EXTREME
   Max         : 396,000,000 (extreme outlier)
-  Phase 5     : → Winsorise at 99th percentile
-  Phase 4     : → SUM per applicant = total bureau credit exposure
+  Phase 4     : → Winsorise at 99th percentile
+  Phase 3     : → SUM per applicant = total bureau credit exposure
 
 AMT_CREDIT_SUM_DEBT
   Skewness    : 39.420 (Highly skewed Right)
   Min         : -4,705,600 (impossible — negative debt)
   Negative rows: 8,418 (0.57%)
   Max         : 170,100,000
-  Phase 5     : → Cap negative values at 0
+  Phase 4     : → Cap negative values at 0
               : → Winsorise at 99th percentile
 
 AMT_CREDIT_SUM_LIMIT
   Skewness    : 17.592 (Highly skewed Right)
   Min         : -586,406 (impossible — negative limit)
   Negative rows: 351 (0.02%)
-  Phase 5     : → Replace negative values with NaN
+  Phase 4     : → Replace negative values with NaN
               : → Winsorise at 99th percentile
 
 AMT_CREDIT_SUM_OVERDUE
   Skewness    : 392.691 (Highly skewed Right) ← EXTREME
   Max         : 3,756,681
   75th pct    : 0 (most credits have no current overdue)
-  Phase 5     : → Winsorise at 99th percentile
-  Phase 4     : → SUM per applicant = total current overdue exposure
+  Phase 4     : → Winsorise at 99th percentile
+  Phase 3     : → SUM per applicant = total current overdue exposure
 
 DAYS_CREDIT_UPDATE
   Skewness    : -12.285 (Highly skewed Left)
   Max         : 372 (future update — impossible)
   Future rows : 17 (0.001%)
-  Phase 5     : → Cap at 0 (no credit updated after application)
+  Phase 4     : → Cap at 0 (no credit updated after application)
 
 AMT_ANNUITY
   Skewness    : 156.204 (Highly skewed Right) ← EXTREME
   Max         : 59,586,682 (extreme outlier)
   Missing     : 77.12% (structural — non-instalment credits)
-  Phase 5     : → Winsorise at 99th percentile
+  Phase 4     : → Winsorise at 99th percentile
 
 ----------------------------------------------------------------
 5. CATEGORICAL COLUMNS — CARDINALITY & BAD RATES
@@ -543,7 +564,7 @@ CREDIT_ACTIVE
   Sold        5,653      0.4%    10.10%     Sold to debt collector
   Bad debt    20         0.001%  20.00%     Written off — highest risk
 
-  Phase 4 actions:
+  Phase 3 actions:
   → COUNT_BUREAU_ACTIVE      per applicant
   → COUNT_BUREAU_CLOSED      per applicant
   → COUNT_BUREAU_BAD_DEBT    per applicant (strong signal)
@@ -551,7 +572,7 @@ CREDIT_ACTIVE
   → FLAG_HAS_BAD_DEBT_BUREAU (mandatory — 20% bad rate)
   → RATIO_ACTIVE_TO_TOTAL    active / total credits
 
-  Phase 5 actions:
+  Phase 4 actions:
   → Group Sold + Bad debt into single high-risk bin for WoE
 
 ---
@@ -568,7 +589,7 @@ CREDIT_CURRENCY
   currency 4  9          0.001%
 
   Decision: NEAR-ZERO VARIANCE — 99.9% single value
-  Phase 5 : → Flag for zero variance screening
+  Phase 4 : → Flag for zero variance screening
             → Expected to screen out on IV
             → Do NOT use as feature
 
@@ -599,17 +620,17 @@ CREDIT_TYPE
   Key findings:
   - Microloan: 20.64% bad rate — 2.5x population rate — STRONG SIGNAL
   - Mortgage:  5.00% bad rate — strong PROTECTIVE signal
-  - Bottom 7 categories: too rare — group into Other in Phase 5
-  - Unknown type of loan: sentinel code — replace with NaN in Phase 5
+  - Bottom 7 categories: too rare — group into Other in Phase 4
+  - Unknown type of loan: sentinel code — replace with NaN in Phase 4
 
-  Phase 4 actions:
+  Phase 3 actions:
   → FLAG_HAS_MICROLOAN   (mandatory — 20.64% bad rate)
   → FLAG_HAS_MORTGAGE    (mandatory — protective signal)
   → FLAG_HAS_CREDIT_CARD
   → COUNT_MICROLOANS     per applicant
   → COUNT_MORTGAGES      per applicant
 
-  Phase 5 grouping strategy:
+  Phase 4 grouping strategy:
   Group             Categories
   ----------------  ------------------------------------------
   Consumer credit   Consumer credit
@@ -625,7 +646,7 @@ CREDIT_TYPE
 6. DATA QUALITY ISSUES SUMMARY
 ----------------------------------------------------------------
 
-Issue                        Rows    %       Treatment (Phase 5)
+Issue                        Rows    %       Treatment (Phase 4)
 ---------------------------  ------  ------  ----------------------
 AMT_CREDIT_SUM_DEBT < 0      8,418   0.57%   Cap at 0
 AMT_CREDIT_SUM_LIMIT < 0     351     0.02%   Replace with NaN
@@ -633,7 +654,7 @@ DAYS_CREDIT_UPDATE > 0       17      0.001%  Cap at 0
 CREDIT_TYPE = Unknown        472     0.03%   Replace with NaN
 
 ----------------------------------------------------------------
-7. PHASE 4 FEATURE ENGINEERING PLAN — BUREAU TABLE
+7. PHASE 3 FEATURE ENGINEERING PLAN — BUREAU TABLE
 ----------------------------------------------------------------
 All features aggregated to SK_ID_CURR grain
 
@@ -675,7 +696,7 @@ F. Credit prolongation
    COUNT_CREDIT_PROLONG        — total prolongations across all credits
 
 ----------------------------------------------------------------
-8. PHASE 5 TREATMENT SUMMARY
+8. PHASE 4 TREATMENT SUMMARY
 ----------------------------------------------------------------
 
 Action                    Columns
@@ -692,7 +713,7 @@ Separate WoE missing bin  AMT_ANNUITY, AMT_CREDIT_MAX_OVERDUE,
                           DAYS_ENDDATE_FACT, AMT_CREDIT_SUM_LIMIT,
                           AMT_CREDIT_SUM_DEBT
 Median imputation         DAYS_CREDIT_ENDDATE
-Zero variance — drop      CREDIT_CURRENCY (review IV in Phase 5)
+Zero variance — drop      CREDIT_CURRENCY (review IV in Phase 4)
 Group rare categories     CREDIT_TYPE bottom 7 → Other
                           CREDIT_ACTIVE: Sold+Bad debt → High Risk
 
@@ -702,10 +723,10 @@ Group rare categories     CREDIT_TYPE bottom 7 → Other
 
 1. CREDIT_DAY_OVERDUE is the strongest signal in bureau table —
    18.21% bad rate when overdue vs 7.79% when not (+10.42pp).
-   FLAG_EVER_OVERDUE is a mandatory Phase 4 feature.
+   FLAG_EVER_OVERDUE is a mandatory Phase 3 feature.
 
 2. CREDIT_ACTIVE = Bad debt has 20% bad rate — 2.5x population.
-   FLAG_HAS_BAD_DEBT_BUREAU is a mandatory Phase 4 feature.
+   FLAG_HAS_BAD_DEBT_BUREAU is a mandatory Phase 3 feature.
 
 3. Microloan credit type has 20.64% bad rate — signals financial
    stress and limited access to mainstream credit.
@@ -715,10 +736,10 @@ Group rare categories     CREDIT_TYPE bottom 7 → Other
 
 5. Thin-file applicants (14.3%) have 10.12% bad rate vs 7.73%
    for applicants with bureau history (+2.39pp).
-   FLAG_NO_BUREAU_HISTORY is a mandatory Phase 4 feature.
+   FLAG_NO_BUREAU_HISTORY is a mandatory Phase 3 feature.
 
 6. CREDIT_CURRENCY is near-zero variance (99.9% currency 1) —
-   expected to screen out on IV in Phase 5.
+   expected to screen out on IV in Phase 4.
 
 7. AMT_CREDIT_MAX_OVERDUE missing (64.73%) is INFORMATIVE —
    missing means never overdue. Do NOT impute with mean/median.
@@ -782,7 +803,7 @@ Coverage by credit type (with vs without balance history):
 Decision:
   Missing bureau_balance features are NOT informative (0.10pp diff)
   → DO NOT create FLAG_NO_BUREAU_BALANCE
-  → Impute missing aggregated features with 0 after Phase 4
+  → Impute missing aggregated features with 0 after Phase 3
   → Exception: recency features (MAX_DPD_LAST_12M) → impute with 0
 
 ----------------------------------------------------------------
@@ -800,7 +821,7 @@ Months per bureau credit:
   75th   : 40 months
   Max    : 97 months (~8 years)
 
-Recency windows for Phase 4:
+Recency windows for Phase 3:
   LAST_3M   : MONTHS_BALANCE >= -3   (last quarter)
   LAST_6M   : MONTHS_BALANCE >= -6   (last half year)
   LAST_12M  : MONTHS_BALANCE >= -12  (last year — most predictive)
@@ -849,7 +870,7 @@ Key findings:
 4. STATUS C AND 0 ARE PROTECTIVE
    Closed and on-time records signal good repayment behaviour.
 
-Phase 5 WoE binning strategy:
+Phase 4 WoE binning strategy:
   Bin 1 : C, 0    (good standing)
   Bin 2 : X       (unknown — own bin)
   Bin 3 : 1       (early delinquency)
@@ -857,7 +878,7 @@ Phase 5 WoE binning strategy:
   Bin 5 : 4, 5    (serious delinquency / default)
 
 ----------------------------------------------------------------
-5. PHASE 4 FEATURE ENGINEERING PLAN — BUREAU_BALANCE TABLE
+5. PHASE 3 FEATURE ENGINEERING PLAN — BUREAU_BALANCE TABLE
 ----------------------------------------------------------------
 Aggregation grain: SK_ID_BUREAU first → then SK_ID_CURR
 
@@ -894,7 +915,7 @@ E. Closed credit features
 ----------------------------------------------------------------
 6. MISSING VALUE TREATMENT AFTER AGGREGATION
 ----------------------------------------------------------------
-After Phase 4 aggregation to SK_ID_CURR grain:
+After Phase 3 aggregation to SK_ID_CURR grain:
 
   Feature type              Missing means        Treatment
   ------------------------  -------------------  ------------------
@@ -915,7 +936,7 @@ Reason: Missing = no balance history reported, NOT = high risk.
 
 1. STATUS 4 has highest bad rate (11.98%) — 91-120 DPD applicants
    are nearly 1.5x more likely to default than population.
-   FLAG_EVER_DPD_120 is a mandatory Phase 4 feature.
+   FLAG_EVER_DPD_120 is a mandatory Phase 3 feature.
 
 2. Perfect monotonic ordering (1→5) confirms STATUS is a clean
    ordinal risk variable — ideal for WoE binning with natural
@@ -933,7 +954,7 @@ Reason: Missing = no balance history reported, NOT = high risk.
    (0.10pp bad rate differential). Safe to impute with 0.
    No FLAG_NO_BUREAU_BALANCE needed.
 
-6. Two-level aggregation required in Phase 4:
+6. Two-level aggregation required in Phase 3:
    bureau_balance → SK_ID_BUREAU grain → bureau grain
    → SK_ID_CURR grain → merge onto application_train
 
@@ -975,10 +996,10 @@ FLAG_LAST_APPL_PER_CONTRACT:
 
 Reason: Some contracts have multiple applications due to
         client/clerk errors. Keep only last application
-        per contract to avoid double counting in Phase 4.
+        per contract to avoid double counting in Phase 3.
 
 Action: Filter to FLAG_LAST_APPL_PER_CONTRACT = 'Y'
-        before ALL aggregations in Phase 4.
+        before ALL aggregations in Phase 3.
 
 ----------------------------------------------------------------
 3. COVERAGE ANALYSIS
@@ -997,7 +1018,7 @@ Interpretation:
   First-time applicants are carefully screened by Home Credit.
   Previous applicants include refused/defaulted history.
 
-Phase 4 action:
+Phase 3 action:
   → FLAG_NO_PREV_APPLICATION = 1 for first-time applicants
   Note: Protective signal here, not risk signal.
 
@@ -1012,9 +1033,9 @@ Rows per applicant:
 Column                      Missing %   Type          Treatment
 --------------------------  ----------  ------------  ---------------------------
 RATE_INTEREST_PRIVILEGED    99.66%      High missing  Flag for IV screening
-                                                      Expected to drop in Phase 5
+                                                      Expected to drop in Phase 4
 RATE_INTEREST_PRIMARY       99.66%      High missing  Flag for IV screening
-                                                      Expected to drop in Phase 5
+                                                      Expected to drop in Phase 4
 AMT_DOWN_PAYMENT            53.02%      Structural    Separate WoE missing bin
                                                       Missing = no down payment
 RATE_DOWN_PAYMENT           53.02%      Structural    Separate WoE missing bin
@@ -1028,7 +1049,7 @@ NFLAG_INSURED_ON_APPROVAL   39.69%      Structural    Separate WoE missing bin
 AMT_GOODS_PRICE             22.60%      Structural    Separate WoE missing bin
 AMT_ANNUITY                 21.73%      Structural    Separate WoE missing bin
 CNT_PAYMENT                 21.73%      Structural    Separate WoE missing bin
-PRODUCT_COMBINATION          0.02%      Random        Mode imputation Phase 5
+PRODUCT_COMBINATION          0.02%      Random        Mode imputation Phase 4
 AMT_CREDIT                   0.00%      Complete      None (zeros = sentinel)
 
 Note: DAYS_* missing 39.69% = same 561,106 rows = structural
@@ -1047,7 +1068,7 @@ NAME_CONTRACT_STATUS (most important column)
   Unused offer    22,771     1.62%   8.25%     -0.39pp
   Approved       886,099    63.01%   7.59%     -1.05pp
 
-  Phase 4 mandatory features:
+  Phase 3 mandatory features:
   → FLAG_EVER_REFUSED          (strong signal +3.39pp)
   → COUNT_PREV_REFUSED
   → COUNT_PREV_APPROVED
@@ -1062,7 +1083,7 @@ NAME_CONTRACT_TYPE
   Cash loans       626,760  44.57%   9.13%  moderate risk
   Consumer loans   625,256  44.46%   7.71%  lowest risk — protective
 
-  Phase 4: FLAG_REVOLVING_LOAN (mandatory)
+  Phase 3: FLAG_REVOLVING_LOAN (mandatory)
 
 ---
 
@@ -1079,7 +1100,7 @@ CODE_REJECT_REASON
   CLIENT  22,771     1.62%    8.25%     Client-initiated
   XAP     1,145,530 81.45%    7.95%     Not applicable
 
-  Phase 4 mandatory features:
+  Phase 3 mandatory features:
   → FLAG_REJECTED_SCOFR (fraud — 21.10% bad rate)
   → FLAG_REJECTED_LIMIT
   → FLAG_REJECTED_HC
@@ -1093,7 +1114,7 @@ NAME_CLIENT_TYPE
   Repeater   1,030,971 73.31% 8.70%  returning customer
   Refreshed  114,352   8.13%  7.31%  lapsed then returned — protective
 
-  Phase 4: FLAG_EVER_REFRESHED (protective signal)
+  Phase 3: FLAG_EVER_REFRESHED (protective signal)
 
 ---
 
@@ -1105,7 +1126,7 @@ NAME_CASH_LOAN_PURPOSE
   Payments on other loans 16.02%  — debt spiral signal
   Buying a garage          6.03%  — asset acquisition — protective
 
-  Phase 4:
+  Phase 3:
   → FLAG_PURPOSE_REFUSED_TO_NAME (mandatory — 23.08%)
   → FLAG_PURPOSE_DEBT_RELATED    (payments/repairs/urgent)
   → FLAG_PURPOSE_ASSET           (garage/home/new car)
@@ -1117,7 +1138,7 @@ NAME_PRODUCT_TYPE
   XNA       900,049  64.00%   8.35%  sentinel — keep as WoE bin
   x-sell    378,096  26.88%   8.04%  cross-sell — lower risk
 
-  Phase 4: FLAG_WALK_IN (mandatory — +3.83pp)
+  Phase 3: FLAG_WALK_IN (mandatory — +3.83pp)
 
 ---
 
@@ -1127,7 +1148,7 @@ CHANNEL_TYPE
   Credit and cash    597,007  42.45%   9.00%  moderate
   Car dealer         406       0.03%   5.17%  lowest risk — secured
 
-  Phase 4: FLAG_CHANNEL_AP_PLUS (mandatory — +4.16pp)
+  Phase 3: FLAG_CHANNEL_AP_PLUS (mandatory — +4.16pp)
 
 ---
 
@@ -1139,7 +1160,7 @@ NAME_YIELD_GROUP
   low_normal  274,880  19.55%   7.13%
   low_action   78,587   5.59%   6.45%
 
-  Phase 5: Natural WoE bins follow yield order
+  Phase 4: Natural WoE bins follow yield order
 
 ---
 
@@ -1148,7 +1169,7 @@ NAME_GOODS_CATEGORY
   Neutral tier:      Mobile (8.65%), Computers (8.10%)
   Protective tier:   Tourism (4.23%), Fitness (4.22%),
                      Medical Supplies (5.62%), Furniture (5.85%)
-  Phase 5: Group into 3 risk tiers for WoE binning
+  Phase 4: Group into 3 risk tiers for WoE binning
 
 ---
 
@@ -1166,7 +1187,7 @@ NAME_SELLER_INDUSTRY
   XNA             710,202  50.50%  9.34%  keep as WoE bin
   Connectivity    237,439  16.88%  9.21%  slightly elevated
   Tourism             374   0.03%  4.28%  protective
-  Phase 5: Group rare categories into Other
+  Phase 4: Group rare categories into Other
 
 ---
 
@@ -1175,20 +1196,20 @@ PRODUCT_COMBINATION
   High risk  : Cash Street products (10.10%–11.62%)
   Medium risk: Card products (9.07%–11.37%)
   Lower risk : POS products (4.64%–8.81%)
-  Phase 5: Group into Cash Street / Card / Cash X-Sell / POS
+  Phase 4: Group into Cash Street / Card / Cash X-Sell / POS
 
 ---
 
 WEEKDAY_APPR_PROCESS_START
   Minimal variation (8.04%–8.87%)
-  Expected to screen out on IV in Phase 5
+  Expected to screen out on IV in Phase 4
 
 ---
 
 NAME_PAYMENT_TYPE
   Minimal variation between legitimate categories
   XNA 36.66% at 9.61% — keep as WoE bin
-  Expected to screen out on IV in Phase 5
+  Expected to screen out on IV in Phase 4
 
 ---
 
@@ -1209,66 +1230,66 @@ AMT_APPLICATION vs AMT_CREDIT
     Canceled dominates both (250k+ rows)
     Approved with AMT_APPLICATION = 0: 39,484 — data error
     Approved with AMT_CREDIT = 0:       1,165 — data error
-  Phase 5: Replace 0 with NaN for both columns
-  Phase 4: CREDIT_TO_APPLICATION_RATIO (only where AMT_APPLICATION > 0)
+  Phase 4: Replace 0 with NaN for both columns
+  Phase 3: CREDIT_TO_APPLICATION_RATIO (only where AMT_APPLICATION > 0)
            FLAG_WAS_DOWNGRADED = (ratio < 1)
            Downgraded applications: 309,118 (21.98%)
 
 DAYS_DECISION
   Range: -2,922 to -1 (all negative — before application)
-  Clean — no sentinels. Convert to positive days in Phase 4.
+  Clean — no sentinels. Convert to positive days in Phase 3.
 
 SELLERPLACE_AREA
   Sentinel (-1): 633,057 rows (45.01%)
   99th pct: 3,570
-  Phase 5: Replace -1 with NaN, Winsorise at 99th pct
+  Phase 4: Replace -1 with NaN, Winsorise at 99th pct
 
 DAYS_FIRST_DRAWING
   Sentinel (365,243): 799,094 rows (56.82%) — majority sentinel
-  Phase 4: FLAG_HAD_DRAWING = (DAYS_FIRST_DRAWING != 365243)
-  Phase 5: Replace 365,243 with NaN
+  Phase 3: FLAG_HAD_DRAWING = (DAYS_FIRST_DRAWING != 365243)
+  Phase 4: Replace 365,243 with NaN
 
 DAYS_FIRST_DUE
   Sentinel (365,243): 33,962 rows (2.41%)
-  Phase 5: Replace 365,243 with NaN
+  Phase 4: Replace 365,243 with NaN
 
 DAYS_LAST_DUE_1ST_VERSION
   Sentinel (365,243): 79,099 rows (5.62%)
-  Phase 5: Replace 365,243 with NaN
+  Phase 4: Replace 365,243 with NaN
 
 DAYS_LAST_DUE
   Sentinel (365,243): 180,792 rows (12.86%)
-  Phase 5: Replace 365,243 with NaN
+  Phase 4: Replace 365,243 with NaN
 
 DAYS_TERMINATION
   Sentinel (365,243): 194,000 rows (13.79%)
-  Phase 5: Replace 365,243 with NaN
+  Phase 4: Replace 365,243 with NaN
 
 AMT_DOWN_PAYMENT
   Min: -0.9 (impossible — negative down payment)
-  Phase 5: Cap at 0
+  Phase 4: Cap at 0
 
 NFLAG_LAST_APPL_IN_DAY
   Mean: 1.000, std: 0.022 — near constant (99.98% = 1)
-  Phase 5: NEAR-ZERO VARIANCE — flag for dropping
+  Phase 4: NEAR-ZERO VARIANCE — flag for dropping
 
 RATE_INTEREST_PRIMARY / RATE_INTEREST_PRIVILEGED
   99.66% missing — only 4,791 rows populated
-  Phase 5: Expected to screen out on high missing gate
+  Phase 4: Expected to screen out on high missing gate
 
 CNT_PAYMENT
   Range: 0-84, mean: 16 months
-  Clean distribution — useful for Phase 4 aggregation
+  Clean distribution — useful for Phase 3 aggregation
   Zeros: missing for refused/canceled applications
 
 NFLAG_INSURED_ON_APPROVAL
   Binary: 0/1, mean: 0.331
   33.1% of approved loans had insurance
   Missing 39.69% = refused/canceled (structural)
-  Phase 4: FLAG_INSURED — keep for aggregation
+  Phase 3: FLAG_INSURED — keep for aggregation
 
 ----------------------------------------------------------------
-7. PHASE 4 FEATURE ENGINEERING PLAN
+7. PHASE 3 FEATURE ENGINEERING PLAN
 ----------------------------------------------------------------
 All features aggregated to SK_ID_CURR grain
 Note: Always filter to FLAG_LAST_APPL_PER_CONTRACT = 'Y' first
@@ -1319,7 +1340,7 @@ H. Insurance
    FLAG_INSURED                  — was insured on approval
 
 ----------------------------------------------------------------
-8. PHASE 5 TREATMENT SUMMARY
+8. PHASE 4 TREATMENT SUMMARY
 ----------------------------------------------------------------
 
 Action                    Columns
@@ -1342,7 +1363,7 @@ Separate WoE missing bin  AMT_DOWN_PAYMENT, RATE_DOWN_PAYMENT,
                           NAME_TYPE_SUITE, DAYS_* (39.69%),
                           AMT_GOODS_PRICE, AMT_ANNUITY,
                           CNT_PAYMENT
-Phase 5 grouping          NAME_GOODS_CATEGORY → 3 risk tiers
+Phase 4 grouping          NAME_GOODS_CATEGORY → 3 risk tiers
                           NAME_CASH_LOAN_PURPOSE → 3 risk tiers
                           PRODUCT_COMBINATION → 4 risk tiers
                           NAME_SELLER_INDUSTRY → group rare
@@ -1420,8 +1441,8 @@ Column types:
 ----------------------------------------------------------------
 Column                  Missing %   Treatment
 ----------------------  ----------  --------------------------
-CNT_INSTALMENT          0.26%       Median imputation Phase 5
-CNT_INSTALMENT_FUTURE   0.26%       Median imputation Phase 5
+CNT_INSTALMENT          0.26%       Median imputation Phase 4
+CNT_INSTALMENT_FUTURE   0.26%       Median imputation Phase 4
 
 All other columns: no missing values
 
@@ -1447,7 +1468,7 @@ Mean        : -33.4 months (~2.8 years back)
 Median      : -26 months
 History depth: 96 months (8 years)
 
-Recency windows for Phase 4:
+Recency windows for Phase 3:
   LAST_3M   : MONTHS_BALANCE >= -3
   LAST_6M   : MONTHS_BALANCE >= -6
   LAST_12M  : MONTHS_BALANCE >= -12  (most predictive)
@@ -1476,23 +1497,23 @@ Key findings:
 1. AMORTIZED DEBT — 100% bad rate (44 rows)
    Every single applicant with this status defaulted.
    Small volume but absolute signal.
-   Phase 4: FLAG_EVER_AMORTIZED_DEBT (mandatory)
+   Phase 3: FLAG_EVER_AMORTIZED_DEBT (mandatory)
 
 2. DEMAND — 23.33% bad rate (1,612 rows)
    Loan called in by Home Credit — severe breach of contract.
    Strong risk signal.
-   Phase 4: FLAG_EVER_DEMAND (mandatory)
+   Phase 3: FLAG_EVER_DEMAND (mandatory)
 
 3. RETURNED TO STORE — 10.31% bad rate
    Goods returned — signals financial stress or dissatisfaction.
-   Phase 4: FLAG_EVER_RETURNED (worth including)
+   Phase 3: FLAG_EVER_RETURNED (worth including)
 
 4. ACTIVE vs COMPLETED — near identical bad rates (7.36% vs 7.43%)
    No meaningful risk difference between ongoing and completed loans.
 
-5. XNA — 2 rows — sentinel, replace with NaN in Phase 5
+5. XNA — 2 rows — sentinel, replace with NaN in Phase 4
 
-Phase 5 WoE grouping strategy:
+Phase 4 WoE grouping strategy:
   High risk bin : Amortized debt, Demand, Canceled
   Medium risk   : Returned to store, Signed
   Low risk      : Active, Completed, Approved
@@ -1509,8 +1530,8 @@ SK_DPD (days past due — monthly)
   DPD > 0     : 197,806 rows (2.40%)
   DPD > 30    : 63,349 rows (0.77%)
   Bad rate — DPD > 0  : 10.23% (+2.92pp vs no DPD 7.31%)
-  Phase 5     : Winsorise at 99th percentile (16)
-  Phase 4     : FLAG_EVER_DPD, MAX_DPD, COUNT_MONTHS_DPD
+  Phase 4     : Winsorise at 99th percentile (16)
+  Phase 3     : FLAG_EVER_DPD, MAX_DPD, COUNT_MONTHS_DPD
 
 SK_DPD_DEF (regulatory default DPD)
   Skewness    : 324.699 (Highly skewed Right — near binary)
@@ -1520,8 +1541,8 @@ SK_DPD_DEF (regulatory default DPD)
   DPD_DEF > 0 : 91,405 rows (1.11%)
   Bad rate — DPD_DEF > 0 : 11.48% (+4.15pp vs no DPD 7.33%)
   Note        : MORE predictive than SK_DPD (+4.15pp vs +2.92pp)
-  Phase 4     : FLAG_EVER_DPD_DEF (mandatory — strongest signal)
-  Phase 5     : Treat as binary — Winsorise at 99th pct
+  Phase 3     : FLAG_EVER_DPD_DEF (mandatory — strongest signal)
+  Phase 4     : Treat as binary — Winsorise at 99th pct
 
 MONTHS_BALANCE
   Range       : -96 to -1
@@ -1533,17 +1554,17 @@ CNT_INSTALMENT
   Mean        : 17.3 months
   Skewness    : 1.580 (Highly skewed Right)
   Note        : Total loan term in months
-  Phase 4     : MEAN_CNT_INSTALMENT per applicant
+  Phase 3     : MEAN_CNT_INSTALMENT per applicant
 
 CNT_INSTALMENT_FUTURE
   Range       : 0 to 84
   Mean        : 10.8 remaining instalments
   Skewness    : 1.825 (Highly skewed Right)
   Note        : Remaining loan term
-  Phase 4     : Use for COMPLETION_RATIO
+  Phase 3     : Use for COMPLETION_RATIO
 
 ----------------------------------------------------------------
-7. PHASE 4 FEATURE ENGINEERING PLAN — POS_CASH_BALANCE
+7. PHASE 3 FEATURE ENGINEERING PLAN — POS_CASH_BALANCE
 ----------------------------------------------------------------
 Aggregation grain: SK_ID_PREV first → then SK_ID_CURR
 
@@ -1580,7 +1601,7 @@ E. Contract status features
    COUNT_HIGH_RISK_STATUS      — amortized + demand + returned
 
 ----------------------------------------------------------------
-8. PHASE 5 TREATMENT SUMMARY
+8. PHASE 4 TREATMENT SUMMARY
 ----------------------------------------------------------------
 
 Action                    Columns
@@ -1602,7 +1623,7 @@ Impute with 0 after agg   All DPD features (missing = no DPD)
 1. FLAG_EVER_DPD_DEF is the strongest signal in this table —
    11.48% bad rate vs 7.33% when no regulatory DPD (+4.15pp).
    More predictive than general DPD (+2.92pp).
-   Mandatory Phase 4 feature.
+   Mandatory Phase 3 feature.
 
 2. Amortized debt status = 100% bad rate — perfect predictor
    for the 44 applicants with this status. FLAG_EVER_AMORTIZED_DEBT
@@ -1670,8 +1691,8 @@ No categoricals — purely behavioural numeric table.
 ----------------------------------------------------------------
 Column               Missing %   Treatment
 -------------------  ----------  --------------------------
-AMT_PAYMENT          0.02%       Median imputation Phase 5
-DAYS_ENTRY_PAYMENT   0.02%       Median imputation Phase 5
+AMT_PAYMENT          0.02%       Median imputation Phase 4
+DAYS_ENTRY_PAYMENT   0.02%       Median imputation Phase 4
 
 Note: Both missing in same 2,212 rows — payment never recorded.
       Consider treating as unpaid (AMT_PAYMENT = 0) rather
@@ -1729,8 +1750,8 @@ RESCHEDULED LOANS (NUM_INSTALMENT_VERSION > 1)
   Reason    : Rescheduling = proactive intervention by Home Credit
               Borrowers who complete rescheduled loans demonstrate
               resilience — rescheduling prevents default
-  Decision  : Include in Phase 4 — potential protective signal
-              Let IV screening decide in Phase 5
+  Decision  : Include in Phase 3 — potential protective signal
+              Let IV screening decide in Phase 4
 
 ----------------------------------------------------------------
 5. NUMERIC COLUMNS — SKEWNESS & OUTLIERS
@@ -1740,14 +1761,14 @@ NUM_INSTALMENT_VERSION
   Skewness  : 9.738 (Highly skewed Right)
   Mean      : 0.919, Max: 178, 99th pct: 4
   Meaning   : Version > 1 = loan was rescheduled
-  Phase 5   : Winsorise at 99th pct (4)
-  Phase 4   : FLAG_RESCHEDULED, COUNT_RESCHEDULES
+  Phase 4   : Winsorise at 99th pct (4)
+  Phase 3   : FLAG_RESCHEDULED, COUNT_RESCHEDULES
 
 NUM_INSTALMENT_NUMBER
   Skewness  : 2.860 (Highly skewed Right)
   Max       : 277, 99th pct: 102
   Meaning   : Instalment sequence — proxy for loan length
-  Phase 5   : Winsorise at 99th pct (102)
+  Phase 4   : Winsorise at 99th pct (102)
 
 DAYS_INSTALMENT
   Skewness  : -0.686 (Moderately skewed Left)
@@ -1760,18 +1781,18 @@ DAYS_ENTRY_PAYMENT
   Range     : -4,921 to -1
   Note      : Min (-4,921) older than DAYS_INSTALMENT min (-2,915)
   Anomaly   : 10 rows with DAYS_ENTRY_PAYMENT < -2,915
-              → cap at -2,915 in Phase 5 (backdating errors)
+              → cap at -2,915 in Phase 4 (backdating errors)
 
 AMT_INSTALMENT
   Skewness  : 15.689 (Highly skewed Right)
   Min       : 0, Max: 3,771,487, 99th pct: 157,527
-  Phase 5   : Winsorise at 99th pct (157,527)
+  Phase 4   : Winsorise at 99th pct (157,527)
 
 AMT_PAYMENT
   Skewness  : 14.452 (Highly skewed Right)
   Min       : 0, Max: 3,771,487, 99th pct: 189,873
   Note      : 99th pct higher than AMT_INSTALMENT — overpayments exist
-  Phase 5   : Winsorise at 99th pct (189,873)
+  Phase 4   : Winsorise at 99th pct (189,873)
 
 ----------------------------------------------------------------
 6. DATA QUALITY ISSUES
@@ -1779,13 +1800,13 @@ AMT_PAYMENT
 
 Issue                              Rows    Treatment
 ---------------------------------  ------  --------------------------
-DAYS_ENTRY_PAYMENT < -2,915        10      Cap at -2,915 in Phase 5
-AMT_INSTALMENT = 0                 check   Investigate in Phase 5
+DAYS_ENTRY_PAYMENT < -2,915        10      Cap at -2,915 in Phase 4
+AMT_INSTALMENT = 0                 check   Investigate in Phase 4
 AMT_PAYMENT = 0 (missing)          2,212   Treat as unpaid (value = 0)
 NUM_INSTALMENT_VERSION max = 178   1       Winsorise at 4 (99th pct)
 
 ----------------------------------------------------------------
-7. PHASE 4 FEATURE ENGINEERING PLAN
+7. PHASE 3 FEATURE ENGINEERING PLAN
 ----------------------------------------------------------------
 Aggregation grain: SK_ID_PREV first → then SK_ID_CURR
 
@@ -1827,7 +1848,7 @@ E. Loan history features
    MEAN_AMT_INSTALMENT         — average instalment amount
 
 ----------------------------------------------------------------
-8. PHASE 5 TREATMENT SUMMARY
+8. PHASE 4 TREATMENT SUMMARY
 ----------------------------------------------------------------
 
 Action                    Columns
@@ -1951,7 +1972,7 @@ Note: Credit card holders have HIGHER bad rate than non-holders.
       not all applicants have Home Credit credit cards.
 
 Decision: Small positive differential (+1.29pp) — consider
-          FLAG_HAS_CREDIT_CARD as a weak risk signal in Phase 4.
+          FLAG_HAS_CREDIT_CARD as a weak risk signal in Phase 3.
 
 ----------------------------------------------------------------
 4. NAME_CONTRACT_STATUS
@@ -1972,9 +1993,9 @@ Population bad rate: 7.71%
 Key findings:
 - 97.04% Active — snapshot of currently active credit cards
 - Minimal risk variation across statuses
-- Expected to screen out on low IV in Phase 5
+- Expected to screen out on low IV in Phase 4
 - Refused (14 rows) too small to be reliable
-- Phase 5: Group rare categories — Approved/Demand/Sent proposal
+- Phase 4: Group rare categories — Approved/Demand/Sent proposal
            into single Other bin
 
 ----------------------------------------------------------------
@@ -2002,7 +2023,7 @@ Bad rates:
   High utilisation (>90%)  : 10.67% vs 6.96% (+3.71pp)
   Over limit (>100%)       : 11.98% vs 7.24% (+4.74pp) ← STRONGEST
 
-Phase 4 features:
+Phase 3 features:
   → FLAG_EVER_OVER_LIMIT        — mandatory (11.98% bad rate)
   → FLAG_EVER_HIGH_UTIL         — mandatory (10.67% bad rate)
   → MAX_UTILISATION             — worst utilisation ever
@@ -2010,7 +2031,7 @@ Phase 4 features:
   → COUNT_MONTHS_OVER_LIMIT     — months over limit
   → COUNT_MONTHS_HIGH_UTIL      — months >90% utilisation
 
-Phase 5: Winsorise utilisation at 99th pct
+Phase 4: Winsorise utilisation at 99th pct
          Cap negative utilisation at 0
 
 ----------------------------------------------------------------
@@ -2027,7 +2048,7 @@ Interpretation:
   Paying only minimum = servicing interest only, not reducing
   principal — classic debt trap / financial stress signal.
 
-Phase 4 features:
+Phase 3 features:
   → FLAG_MIN_PAYMENT_ONLY       — mandatory (paying minimum only)
   → PAYMENT_VS_MIN_RATIO        — AMT_PAYMENT_CURRENT /
                                    AMT_INST_MIN_REGULARITY
@@ -2046,7 +2067,7 @@ Any ATM drawing (> 0) : 296,069 records (12.57%)
 ATM 99th percentile   : 157,500
 Bad rate — ATM drawing: 10.63% vs 7.29% (+3.34pp)
 
-Phase 4 features:
+Phase 3 features:
   → FLAG_EVER_ATM_DRAWING       — mandatory (10.63% bad rate)
   → SUM_AMT_DRAWINGS_ATM        — total ATM drawings
   → MEAN_AMT_DRAWINGS_ATM_LAST_12M — recent ATM drawing trend
@@ -2072,7 +2093,7 @@ Comparison with POS_CASH_balance:
   is more severe (99th pct 184 vs 16). Credit card delinquency
   is a stronger default signal than POS loan delinquency.
 
-Phase 4 features:
+Phase 3 features:
   → FLAG_EVER_DPD               — any SK_DPD > 0
   → FLAG_EVER_DPD_DEF           — any SK_DPD_DEF > 0 (mandatory)
   → MAX_DPD                     — worst DPD ever
@@ -2080,7 +2101,7 @@ Phase 4 features:
   → MAX_DPD_LAST_12M            — worst DPD last 12 months
   → COUNT_MONTHS_DPD            — months with any DPD
 
-Phase 5: Winsorise SK_DPD at 99th pct (184)
+Phase 4: Winsorise SK_DPD at 99th pct (184)
          SK_DPD_DEF treat as binary
 
 ----------------------------------------------------------------
@@ -2122,7 +2143,7 @@ Winsorisation required:
   SK_DPD                   — 99th pct (184)
 
 ----------------------------------------------------------------
-10. PHASE 4 FEATURE ENGINEERING PLAN — CREDIT_CARD_BALANCE
+10. PHASE 3 FEATURE ENGINEERING PLAN — CREDIT_CARD_BALANCE
 ----------------------------------------------------------------
 Aggregation grain: SK_ID_PREV first → then SK_ID_CURR
 
@@ -2175,7 +2196,7 @@ H. Recency windows
    to all DPD, utilisation, and payment features
 
 ----------------------------------------------------------------
-11. PHASE 5 TREATMENT SUMMARY
+11. PHASE 4 TREATMENT SUMMARY
 ----------------------------------------------------------------
 
 Action                    Columns
@@ -2204,7 +2225,7 @@ Group rare categories     NAME_CONTRACT_STATUS:
 ----------------------------------------------------------------
 
 1. OVER LIMIT is the strongest signal in this table (+4.74pp).
-   FLAG_EVER_OVER_LIMIT is a mandatory Phase 4 feature.
+   FLAG_EVER_OVER_LIMIT is a mandatory Phase 3 feature.
    Exceeding credit limit = direct financial distress signal.
 
 2. HIGH UTILISATION (+3.71pp) — approaching the limit is
@@ -2232,11 +2253,11 @@ Group rare categories     NAME_CONTRACT_STATUS:
    after aggregation impute with 0 (no card = no signal).
 
 8. NAME_CONTRACT_STATUS is 97% Active — minimal variation.
-   Expected to screen out on low IV in Phase 5.
+   Expected to screen out on low IV in Phase 4.
 
 9. UTILISATION = AMT_BALANCE / AMT_CREDIT_LIMIT_ACTUAL is
    the single most important engineered ratio in this table.
-   Must be computed before aggregation in Phase 4.
+   Must be computed before aggregation in Phase 3.
    Handle zero credit limits with NaN replacement before
    division to avoid inf values.
 
@@ -2291,7 +2312,7 @@ AMT_REQ_CREDIT_BUREAU_HOUR      0.0        99.39%   43,145
 ----------------------------------------------------------------
 Key: does the minority value carry predictive signal?
      If yes → keep despite near-zero variance
-     If no  → drop at Phase 5 screening gate
+     If no  → drop at Phase 4 screening gate
 
 Column                          Min n    Maj Bad%  Min Bad%  Diff
 ------------------------------  -------  --------  --------  ------
@@ -2359,7 +2380,7 @@ C. KEEP — Near-constant but meaningful signal
 D. PHASE 5 IV GATE — Borderline (small minority + signal)
    Strong bad rate differential but minority too small to
    be statistically reliable. WoE bin may be unstable.
-   Let IV screening and bin stability decide in Phase 5.
+   Let IV screening and bin stability decide in Phase 4.
    Column               Dom %    Min n    Diff
    -------------------  -------  -------  --------
    FLAG_DOCUMENT_7      99.98%   59       -2.99pp
@@ -2374,7 +2395,7 @@ Two child table columns flagged for near-zero variance:
 
 CREDIT_CURRENCY (bureau table)
   Dominant value : currency 1 — 99.9% of records
-  Decision       : Expected to screen out on IV in Phase 5
+  Decision       : Expected to screen out on IV in Phase 4
                    Do NOT use as aggregation feature
 
 NFLAG_LAST_APPL_IN_DAY (previous_application table)
@@ -2398,12 +2419,12 @@ Final decisions:
                          FLAG_DOCUMENT_12, FLAG_CONT_MOBILE,
                          FLAG_DOCUMENT_20)
   Keep with signal    : 9 columns
-  Phase 5 IV gate     : 4 columns
+  Phase 4 IV gate     : 4 columns
   Child table drops   : 2 columns
                         (CREDIT_CURRENCY, NFLAG_LAST_APPL_IN_DAY)
 
 Note: No columns are physically removed at this stage.
-      Drops are executed at the Phase 5 screening gate
+      Drops are executed at the Phase 4 screening gate
       alongside IV filtering. This keeps the process
       auditable — all decisions documented here first.
 
@@ -2417,7 +2438,7 @@ Zero/near-zero variance columns are removed because:
    non-defaulters if everyone has the same value
 
 2. WoE/IV impact — near-constant columns produce near-zero
-   IV and screen out in Phase 5 anyway — better to catch
+   IV and screen out in Phase 4 anyway — better to catch
    them explicitly here
 
 3. Model stability — near-constant columns can cause issues
@@ -2543,7 +2564,7 @@ PHASE 2 - STEP 10: FEATURE INVENTORY ARTIFACT
 File location : data/processed/feature_inventory.csv
 Total features: 120 (excludes TARGET and SK_ID_CURR)
 Source table  : application_train only
-               (child table features added in Phase 4)
+               (child table features added in Phase 3)
 
 Columns in inventory:
   feature        — column name
@@ -2556,7 +2577,7 @@ Columns in inventory:
                     for categorical)
   leakage_flag   — Yes/No
   variance_flag  — Yes/No (flagged in Step 5)
-  treatment      — Phase 4/5 action
+  treatment      — Phase 3/5 action
 
 ----------------------------------------------------------------
 2. MISSING RATE DISTRIBUTION
@@ -2588,7 +2609,7 @@ Keep with signal : 9 columns
   FLAG_DOCUMENT_14, FLAG_DOCUMENT_15, FLAG_DOCUMENT_16,
   FLAG_DOCUMENT_18
 
-Phase 5 IV gate  : 4 columns
+Phase 4 IV gate  : 4 columns
   FLAG_DOCUMENT_7, FLAG_DOCUMENT_17,
   FLAG_DOCUMENT_19, FLAG_DOCUMENT_21
 
@@ -2598,14 +2619,14 @@ Phase 5 IV gate  : 4 columns
 Treatment                                          Count
 -------------------------------------------------  -----
 Separate WoE missing bin — structural (50-70%)     47
-Review in Phase 5 (IV screening)                   33
+Review in Phase 4 (IV screening)                   33
 DROP — constant/near-constant/no signal            7
-Convert to positive days/years in Phase 4          4
+Convert to positive days/years in Phase 3          4
 Separate WoE missing bin — informative/other       2
-Median imputation in Phase 5                       2
-Winsorise at 99th pct in Phase 5                   4
-Replace sentinel with NaN in Phase 5               2
-Replace sentinel + create FLAG in Phase 4          2
+Median imputation in Phase 4                       2
+Winsorise at 99th pct in Phase 4                   4
+Replace sentinel with NaN in Phase 4               2
+Replace sentinel + create FLAG in Phase 3          2
 Already normalized — do NOT rescale                3
 Keep XNA as valid WoE bin                          1
 Keep — protective signal                           9
@@ -2671,7 +2692,7 @@ C. Imputation
                     all building stats (_AVG/_MODE/_MEDI)
 
 D. IV screening gate
-   All 33 "Review in Phase 5" columns screened by IV
+   All 33 "Review in Phase 4" columns screened by IV
    Standard bands: <0.02 drop, 0.02-0.1 weak,
    0.1-0.3 medium, 0.3-0.5 strong, >0.5 investigate
 
@@ -2682,8 +2703,8 @@ Path: data/processed/feature_inventory.csv
 Format: CSV, 120 rows x 9 columns
 Note: This inventory covers application_train only.
       Child table aggregated features will be appended
-      to this inventory after Phase 4 feature engineering.
-      The final inventory (Phase 5 input) will cover all
+      to this inventory after Phase 3 feature engineering.
+      The final inventory (Phase 4 input) will cover all
       features from all tables at the SK_ID_CURR grain.
 
 ================================================================
