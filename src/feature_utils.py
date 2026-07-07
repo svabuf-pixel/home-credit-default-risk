@@ -18,13 +18,26 @@ def replace_sentinels(df):
     Replace sentinel values with NaN across application_train.
     Must be called AFTER create_sentinel_flags().
 
+    Targeted replacements only — never global numeric replaces,
+    to avoid collisions (e.g. SK_ID_CURR == 365243).
+
     Usage:
         df_train = replace_sentinels(df_train)
     """
     df = df.copy()
-    df.replace({365243: np.nan, "XNA": np.nan, "Unknown": np.nan}, inplace=True)
-    df["ORGANIZATION_TYPE"] = df["ORGANIZATION_TYPE"].fillna("XNA")
+
+    # 365243 sentinel — ONLY in DAYS_EMPLOYED (targeted, not global)
+    df["DAYS_EMPLOYED"] = df["DAYS_EMPLOYED"].replace(365243, np.nan)
+
+    # OWN_CAR_AGE sentinel
     df["OWN_CAR_AGE"] = df["OWN_CAR_AGE"].replace(64, np.nan)
+
+    # String sentinels — safe to do globally (no numeric collision risk)
+    df.replace({"XNA": np.nan, "Unknown": np.nan}, inplace=True)
+
+    # Restore ORGANIZATION_TYPE XNA — it is a valid risk category
+    df["ORGANIZATION_TYPE"] = df["ORGANIZATION_TYPE"].fillna("XNA")
+
     return df
 
 def encode_binary_flags(df):
