@@ -1,3 +1,5 @@
+from scipy.stats import mstats
+
 def classify_source(col_name):
     """Classify a column name into its source table group."""
     bureau_cols = [
@@ -59,6 +61,84 @@ def group_missing_by_source(missing_series):
 
     print(summary)
     return df_missing
+
+# WINSORISE
+WINSORISE_COLS = [
+    # --- application_train raw columns ---
+    "AMT_INCOME_TOTAL",
+    "AMT_CREDIT",
+    "AMT_ANNUITY",
+    "AMT_GOODS_PRICE",
+    "CNT_CHILDREN",
+    "CNT_FAM_MEMBERS",
+
+    # --- derived ratios (inherit AMT tails) ---
+    "CREDIT_TO_INCOME",
+    "DEBT_TO_INCOME",
+    "CREDIT_TO_GOODS",
+
+    # --- bureau aggregations ---
+    "MAX_AMT_CREDIT_MAX_OVERDUE",
+    "SUM_AMT_CREDIT_SUM",
+    "MEAN_AMT_CREDIT_SUM",
+    "SUM_AMT_CREDIT_SUM_DEBT",
+    "MEAN_AMT_CREDIT_SUM_DEBT",
+    "SUM_AMT_CREDIT_SUM_OVERDUE",
+    "MAX_CREDIT_DAY_OVERDUE",
+
+    # --- previous_application aggregations ---
+    "MEAN_AMT_CREDIT",
+    "MAX_AMT_CREDIT",
+    "MEAN_AMT_ANNUITY",
+
+    # --- POS_CASH aggregations ---
+    "POS_MAX_DPD",
+    "POS_MAX_DPD_DEF",
+
+    # --- installments aggregations ---
+    "INST_MAX_DAYS_LATE",
+    "INST_SUM_AMT_UNDERPAID",
+    "INST_MEAN_AMT_INSTALMENT",
+
+    # --- credit card aggregations ---
+    "CC_MAX_DPD",
+    "CC_MAX_UTILISATION",
+    "CC_MEAN_UTILISATION",
+    "CC_MAX_AMT_BALANCE",
+    "CC_MEAN_AMT_BALANCE",
+    "CC_SUM_AMT_DRAWINGS_ATM",
+    "CC_MEAN_AMT_DRAWINGS",
+]
+
+def winsorise_columns(df, columns=WINSORISE_COLS, caps=None):
+    """
+    Cap right-tail outliers at the 99th percentile.
+
+    LEAKAGE GUARD: caps must be computed on TRAIN only.
+    - Train: call with caps=None -> computes caps (ignoring NaN) and returns them
+    - Test:  call with caps=<the dict returned from the train call>
+
+    Must run BEFORE zero-imputation — quantiles are computed on raw
+    values with NaN excluded, so imputed zeros don't distort the caps.
+
+    Usage:
+        df_train, train_caps = winsorise_columns(df_train)
+        df_test, _           = winsorise_columns(df_test, caps=train_caps)
+    """
+    df = df.copy()
+
+    if caps is None:
+        caps = {
+            col: df[col].quantile(0.99)
+            for col in columns
+            if col in df.columns
+        }
+
+    for col, cap in caps.items():
+        if col in df.columns:
+            df[col] = df[col].clip(upper=cap)
+
+    return df, caps
 
 # =============================================================================
 # MISSING VALUE IMPUTATION — Phase 4
@@ -156,3 +236,5 @@ def impute_missing(df, medians=None):
             df[c] = df[c].fillna(m)
 
     return df, medians
+
+
