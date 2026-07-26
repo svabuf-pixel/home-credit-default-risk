@@ -237,4 +237,40 @@ def impute_missing(df, medians=None):
 
     return df, medians
 
+def get_binning_lists(df, target_col="TARGET", id_col="SK_ID_CURR"):
+    """
+    Split feature columns into numerical and categorical lists for optbinning.
+
+    Excludes the target and ID columns — binning either would be
+    meaningless (ID) or catastrophic leakage (target).
+
+    Binary 0/1 columns are returned as numerical — optbinning handles
+    them correctly and treats each value as its own bin.
+
+    Usage:
+        num_cols, cat_cols = get_binning_lists(df_train)
+    """
+    exclude = {target_col, id_col}
+    features = [c for c in df.columns if c not in exclude]
+
+    categorical = [
+        c for c in features
+        if df[c].dtype == "object"
+        or df[c].dtype == "bool"
+        or str(df[c].dtype) in ("string", "category")
+    ]
+    numerical = [c for c in features if c not in categorical]
+
+    # Integrity check — nothing should fall through
+    unclassified = set(features) - set(numerical) - set(categorical)
+    if unclassified:
+        print(f"⚠️  WARNING — unclassified columns: {unclassified}")
+
+    print(f"Numerical:   {len(numerical)}")
+    print(f"Categorical: {len(categorical)}")
+    print(f"Excluded:    {sorted(exclude)}")
+    print(f"Total:       {len(numerical) + len(categorical)} of {len(features)} features")
+
+    return numerical, categorical
+
 

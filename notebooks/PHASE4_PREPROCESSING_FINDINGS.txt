@@ -1,0 +1,491 @@
+================================================================
+PHASE 4 — FEATURE MATRIX ASSEMBLY & PREPROCESSING
+FINDINGS, DECISIONS & RATIONALE
+================================================================
+Project : Home Credit Default Risk
+Notebook: 04_preprocessing.ipynb
+Module  : src/prepro_utils.py
+Date    : 2026-07-26
+
+Input : feature_matrix_train.parquet  (307,511 x 249)
+        feature_matrix_test.parquet   ( 48,744 x 248)
+Output : preprocessed_train.parquet / preprocessed_test.parquet
+         woe_train.parquet / woe_test.parquet (scorecard track)
+         challenger_train.parquet / challenger_test.parquet (ML track)
+
+================================================================
+0. BUGS FOUND AND FIXED IN PHASE 3 CODE
+================================================================
+Two defects in feature_utils.replace_sentinels() were discovered
+during Phase 4 verification. Both were caused by blanket
+DataFrame-wide .replace() calls.
+
+--- BUG 1: ORGANIZATION_TYPE XNA destroyed ---
+Symptom : ORGANIZATION_TYPE showed 55,374 NaN instead of "XNA"
+Cause   : df.replace({"XNA": np.nan}) applied globally
+Impact  : Phase 2 EDA explicitly required XNA be KEPT as a valid
+          category — it identifies the unemployed/retired
+          population (5.40% bad rate vs 8.66% employed).
+          Converting to NaN would have hidden this segment.
+Fix     : Global XNA replace retained, followed by targeted
+          restore: df["ORGANIZATION_TYPE"].fillna("XNA")
+Verified: ORGANIZATION_TYPE = 58 unique values, XNA = 55,374 (train)
+                                                XNA =  9,274 (test)
+
+--- BUG 2: SK_ID_CURR primary key destroyed (value collision) ---
+Symptom : 1 row with NaN SK_ID_CURR (row index 228997)
+Cause   : df.replace({365243: np.nan}) applied globally.
+          One applicant's SK_ID_CURR was literally 365243 —
+          the same value as the DAYS_EMPLOYED sentinel.
+          SK_ID_CURR range is ~100,002–456,255, so collision
+          was possible and occurred exactly once.
+Impact  : Silent loss of a primary key. Would have broken any
+          downstream join and corrupted row identity.
+Fix     : Sentinel replacement made TARGETED, not global:
+              df["DAYS_EMPLOYED"].replace(365243, np.nan)
+Verified: SK_ID_CURR missing = 0
+
+--- LESSON ---
+Never use DataFrame-wide numeric .replace() on a table that
+contains ID columns. Numeric sentinels can collide with
+legitimate values in unrelated columns. Always target the
+specific column the sentinel belongs to.
+
+================================================================
+1. PIPELINE ORDER — AND WHY IT WAS CORRECTED
+================================================================
+Initial (incorrect) order:
+    1. Impute missing (zero-fill + median)
+    2. Winsorise
+
+Corrected order:
+    1. Winsorise      (on raw values, NaN still present)
+    2. Impute missing (zero-fill + median)
+
+--- RATIONALE ---
+pandas .quantile() ignores NaN by default. Computing the 99th
+percentile BEFORE imputation therefore ranks only genuine
+observations.
+
+Example — MAX_AMT_CREDIT_MAX_OVERDUE:
+  - 40.2% of rows are NaN (applicant never had an overdue event)
+  - Pre-imputation 99th pct ranks only real overdue amounts
+    → cap = 75,627 (down from max 116,000,000)
+  - Post-imputation, those 40.2% become 0 and enter the ranking,
+    mixing artificial zeros with genuine overdue behaviour and
+    distorting the cap.
+
+The cap must describe the population it is meant to constrain —
+applicants who actually had overdue amounts — not a blended
+population of real events and imputed non-events.
+
+--- RECOVERY ---
+The incorrect order had already been executed in-session, but
+was never saved to disk. feature_matrix_*.parquet still held
+the correct pre-imputation state, so reloading from Parquet
+restored the correct starting point. No data was lost.
+
+================================================================
+2. MISSING VALUE TREATMENT — THREE-BUCKET STRATEGY
+================================================================
+191 of 249 columns had missing values before treatment.
+95 remain missing after treatment — all intentionally.
+
+Missing rates were grouped by SOURCE TABLE to make the pattern
+interpretable (see prepro_utils.classify_source /
+group_missing_by_source):
+
+  source                 n_cols  n_missing  mean%   max%
+  ---------------------  ------  ---------  ------  ------
+  credit_card                23         22   72.17   83.32
+  bureau_balance             11         11   70.01   70.01
+  application_train         138         91   23.21   69.87
+  bureau                     23         22   14.94   40.20
+  pos_cash                   11         11    6.68    6.69
+  installments               17         17    5.89    5.89
+  previous_application       26         25    5.17    5.68
+
+Within each child table the missing rate is near-uniform and
+equals that table's COVERAGE GAP (share of applicants with no
+records in that table). Confirms missingness is structural,
+not random.
+
+  bureau         14.315%  = 44,021 thin-file applicants
+  bureau_balance 70.008%  = only 30% have balance history
+  previous_app    5.351%  = 16,455 first-time applicants
+  pos_cash        6.681%
+  installments    5.888%
+  credit_card    74.657%  = only 25.3% hold a Home Credit card
+
+--- BUCKET 1: IMPUTE 0 ---
+Applies to: child-table FLAGS, COUNTS, SUMS, and MAX-DPD features.
+Rationale : "No records" genuinely means zero events. For an
+            applicant with no loan history, FLAG_EVER_DPD = 0,
+            COUNT_LATE = 0 and MAX_DPD = 0 are all TRUE
+            statements, not fabrications.
+Also includes MAX_AMT_CREDIT_MAX_OVERDUE: a borrower who was
+never overdue genuinely has a maximum overdue amount of zero.
+This resolves the 26pp of extra missingness above the thin-file
+baseline (40.2% vs 14.3%) caused by max() over an all-NaN group.
+
+--- BUCKET 2: MEDIAN IMPUTATION (train-fitted) ---
+Applies to: application_train numerics with <1% random missingness.
+  EXT_SOURCE_2, AMT_GOODS_PRICE, CREDIT_TO_GOODS, AMT_ANNUITY,
+  ANNUITY_TO_CREDIT, DEBT_TO_INCOME, CNT_FAM_MEMBERS,
+  POSITIVE_DAYS_LAST_PHONE_CHANGE, the 4 social-circle counts,
+  and the low-missing EXT_SOURCE interaction terms.
+Rationale : Missingness shows no informative pattern and volume
+            is negligible. Phase 2 confirmed EXT_SOURCE_2's
+            missing/present bad rate differential was -0.19pp.
+
+--- BUCKET 3: LEAVE AS NaN (informative / structural) ---
+Applies to:
+  - EXT_SOURCE_1 (56.4%), EXT_SOURCE_3 (19.8%)
+    Missing = thin-file applicant. Phase 2 measured +1.02pp and
+    +1.54pp bad rate lift for the missing population.
+  - EXT_*_STD interaction terms — inherit parent missingness;
+    std of a single non-null value is undefined.
+  - OWN_CAR_AGE (66.8%) — missing = does not own a car.
+  - OCCUPATION_TYPE (31.3%) — missing = unemployed/unrecorded.
+  - All 47 building-stat columns (_AVG/_MODE/_MEDI, 47–70%)
+    Structural: only populated for apartment-block dwellers.
+  - YEARS_EMPLOYED / EMPLOYMENT_TO_AGE (18.0%) — the
+    DAYS_EMPLOYED sentinel population; signal preserved
+    separately in FLAG_EMPLOYED_SENTINEL.
+  - AMT_REQ_CREDIT_BUREAU_* (13.5%) — missing = no enquiry history.
+  - NAME_TYPE_SUITE, CODE_GENDER, NAME_FAMILY_STATUS — categorical,
+    handled natively by WoE binning.
+Rationale : Missingness carries risk signal. Imputation would
+            destroy it. WoE binning assigns NaN its own bin,
+            preserving the information.
+
+--- BUCKET 3 EXCEPTION: RATIO / MEAN-AMOUNT AGGREGATIONS ---
+Child-table ratio and mean features are LEFT AS NaN even though
+they share a bucket-1 prefix:
+  CC_MEAN_PAYMENT_VS_MIN, CC_*_UTILISATION,
+  CC_ATM_TO_TOTAL_DRAWING_RATIO, CC_MEAN/MAX_AMT_BALANCE,
+  CC_MEAN_CREDIT_LIMIT, CC_MEAN_AMT_DRAWINGS,
+  POS_MEAN_COMPLETION_RATIO, INST_MEAN_PAYMENT_RATIO,
+  INST_MEAN/MAX_DAYS_LATE, INST_MEAN_AMT_INSTALMENT,
+  BB_RATIO_GOOD_MONTHS, RATIO_ACTIVE_TO_TOTAL,
+  DEBT_TO_CREDIT_RATIO, MEAN_AMT_CREDIT_SUM(_DEBT),
+  DAYS_SINCE_LAST/FIRST_CREDIT, MEAN/MAX_AMT_CREDIT,
+  MEAN_AMT_ANNUITY, MEAN_CNT_PAYMENT,
+  MEAN_CREDIT_TO_APP_RATIO, REFUSAL_RATE, APPROVAL_RATE,
+  DAYS_SINCE_LAST_DECISION
+
+Rationale : For a ratio, 0 is a LIE, not a neutral value.
+            A payment ratio of 0 means "paid nothing" — the
+            WORST possible behaviour. Imputing 0 for the ~75%
+            of applicants with no credit card would flood the
+            highest-risk band with innocent no-history
+            applicants and destroy the feature's signal.
+            NaN → its own WoE bin is both safer and honest.
+
+--- SECONDARY MISSINGNESS SOURCES DETECTED ---
+Some columns exceed their table's coverage baseline, indicating
+a second cause of missingness introduced during aggregation:
+  MAX_AMT_CREDIT_MAX_OVERDUE  40.20% vs 14.32% baseline
+      → max() over an all-NaN group returns NaN
+  MEAN_AMT_CREDIT_SUM_DEBT    16.71% vs 14.32%
+  DEBT_TO_CREDIT_RATIO        14.67% vs 14.32%
+      → .replace(0, nan) in denominator
+  CC_MEAN_PAYMENT_VS_MIN      83.32% vs 74.66%
+      → zero minimum-payment months
+  CC_ATM_TO_TOTAL_DRAWING_RATIO 82.83% vs 74.66%
+      → zero total drawings
+  CC_MAX/MEAN_UTILISATION     74.94% vs 74.66%
+      → zero credit limits
+
+--- LEAKAGE GUARD ---
+impute_missing(df, medians=None) computes medians on TRAIN ONLY
+and returns them. Test is imputed with the TRAIN medians:
+    df_train, train_medians = impute_missing(df_train)
+    df_test, _ = impute_missing(df_test, medians=train_medians)
+
+--- VERIFICATION ---
+  SK_ID_CURR missing          : 0     (bug 2 fixed)
+  CC_COUNT_MONTHS_DPD missing : 0     (bucket 1 applied)
+  EXT_SOURCE_2 missing        : 0     (bucket 2 applied)
+  EXT_SOURCE_1 missing        : 173,378 (bucket 3 preserved,
+                                = 56.4% of 307,511 as expected)
+  Columns with missing: 191 → 95 (all intentional)
+
+================================================================
+3. WINSORISATION
+================================================================
+Method   : cap upper tail at the 99th percentile
+Direction: upper only — all flagged columns are right-skewed
+Guard    : caps computed on TRAIN, applied unchanged to TEST
+
+--- SCOPE CORRECTION ---
+The Phase 2 findings listed winsorisation targets at the RAW
+TABLE level (e.g. SK_DPD, AMT_BALANCE, NUM_INSTALMENT_VERSION,
+SELLERPLACE_AREA). Those columns no longer exist — Phase 3
+consumed them during aggregation. The winsorisation list was
+therefore remapped to their aggregated descendants
+(MAX_/SUM_/MEAN_ variants) plus the surviving application_train
+columns and the derived ratios that inherit their tails.
+
+--- COLUMNS WINSORISED (WINSORISE_COLS) ---
+application_train : AMT_INCOME_TOTAL, AMT_CREDIT, AMT_ANNUITY,
+                    AMT_GOODS_PRICE, CNT_CHILDREN, CNT_FAM_MEMBERS
+derived ratios    : CREDIT_TO_INCOME, DEBT_TO_INCOME,
+                    CREDIT_TO_GOODS
+bureau            : MAX_AMT_CREDIT_MAX_OVERDUE, SUM_AMT_CREDIT_SUM,
+                    MEAN_AMT_CREDIT_SUM, SUM_AMT_CREDIT_SUM_DEBT,
+                    MEAN_AMT_CREDIT_SUM_DEBT,
+                    SUM_AMT_CREDIT_SUM_OVERDUE,
+                    MAX_CREDIT_DAY_OVERDUE
+previous_app      : MEAN_AMT_CREDIT, MAX_AMT_CREDIT,
+                    MEAN_AMT_ANNUITY
+pos_cash          : POS_MAX_DPD, POS_MAX_DPD_DEF
+installments      : INST_MAX_DAYS_LATE, INST_SUM_AMT_UNDERPAID,
+                    INST_MEAN_AMT_INSTALMENT
+credit_card       : CC_MAX_DPD, CC_MAX_UTILISATION,
+                    CC_MEAN_UTILISATION, CC_MAX_AMT_BALANCE,
+                    CC_MEAN_AMT_BALANCE, CC_SUM_AMT_DRAWINGS_ATM,
+                    CC_MEAN_AMT_DRAWINGS
+
+--- TOOL CHOICE ---
+scipy.stats.mstats.winsorize was rejected. Two reasons:
+  1. Its `limits` argument is the PROPORTION clipped from each
+     end, not a percentile position. limits=[0.01, 0.99] would
+     flatten 99% of values to the 1st percentile — a silent,
+     catastrophic error.
+  2. It recomputes cutoffs from whatever data it is given, so it
+     cannot reuse train-fitted caps on test. No leakage guard.
+Implementation uses .quantile(0.99) to COMPUTE and .clip(upper=)
+to APPLY, separating the two so caps can be persisted.
+
+--- VERIFICATION ---
+  AMT_INCOME_TOTAL max           : 117,000,000 → 472,500
+  MAX_AMT_CREDIT_MAX_OVERDUE max : 115,987,185 →  75,627
+  CC_COUNT_MONTHS_DPD missing    : 229,577 (still NaN — confirms
+      winsorisation ran BEFORE imputation, as required)
+
+================================================================
+4. RARE CATEGORY GROUPING — DECISION
+================================================================
+Decision: rely on optbinning's automatic category merging rather
+than hand-coding pre-grouping rules.
+
+--- RATIONALE ---
+Manual pre-grouping gives a cleaner audit trail ("Other_A and
+Other_B merged: both below the 5% stability threshold, bad rates
+8.78% vs 9.83%, statistically indistinguishable"). Automatic
+merging gives speed and consistency across 247 features.
+
+The chosen mitigation is REVIEW-AFTER rather than GROUP-BEFORE:
+  1. Run optbinning across all features
+  2. Inspect resulting bins, especially EDA-flagged categoricals
+  3. Verify each bin meets the 5% stability threshold
+  4. Override with user_splits where a bin is indefensible
+  5. Document the review
+
+This preserves auditability while avoiding a hand-maintained
+list that would drift out of sync with the data.
+
+================================================================
+5. BINNING & WoE TRANSFORMATION
+================================================================
+Tool  : optbinning.BinningProcess
+Fit on: TRAIN ONLY (uses target) — transform applied to both
+
+--- COLUMN CLASSIFICATION ---
+get_column_lists() from Phase 2 was retired for this stage.
+On the 249-column feature matrix it produced:
+  - SK_ID_CURR and TARGET inside the numeric list
+    (would bin a primary key, and bin the target against itself)
+  - prefixed flags (POS_FLAG_*, BB_FLAG_*, CC_FLAG_*, INST_FLAG_*)
+    misclassified as numeric because they do not start with "FLAG_"
+  - 3 columns unclassified entirely: CODE_GENDER,
+    NAME_CONTRACT_TYPE (2 unique values, excluded by the
+    nunique()>2 filter) and EMERGENCYSTATE_MODE (boolean dtype)
+
+Replaced by get_binning_lists(), which excludes TARGET and
+SK_ID_CURR explicitly, classifies by dtype, and asserts nothing
+is left unclassified.
+  Numerical  : 234
+  Categorical:  13
+  Total      : 247 of 247 features accounted for
+
+--- CONFIGURATION ---
+  min_bin_size    = 0.05   (5% population stability threshold)
+  max_n_bins      = 6      (coarse classing)
+  monotonic_trend = "auto_asc_desc"  (numerical only)
+  selection_criteria = {"iv": {"min": 0.02, "max": 0.5}}
+
+monotonic_trend is applied to numerical features only —
+enforcing a monotonic trend on a nominal categorical such as
+ORGANIZATION_TYPE is meaningless as the categories have no
+inherent order.
+
+Note: min_bin_size and max_n_bins are OptimalBinning parameters
+and must be passed via binning_fit_params, not as top-level
+BinningProcess arguments.
+
+--- RESULT ---
+  Features fitted : 247
+  Features kept   : 117  (47%)
+
+--- TOP FEATURES BY IV ---
+  EXT_1_2_3_MEAN        0.609   EXCLUDED (IV > 0.5)
+  EXT_2_3_MEAN          0.538   EXCLUDED (IV > 0.5)
+  EXT_1_2_3_MIN         0.464   selected
+  EXT_2_3_MIN           0.446   selected
+  EXT_1_2_3_MAX         0.442   selected
+  EXT_2_3_MAX           0.415   selected
+  EXT_1_3_MEAN          0.414   selected
+  EXT_1_2_MEAN          0.380   selected
+  EXT_1_3_MAX           0.371   selected
+  EXT_1_3_MIN           0.359   selected
+  EXT_1_2_MAX           0.344   selected
+  EXT_1_2_MIN           0.335   selected
+  EXT_SOURCE_3          0.331   selected
+  EXT_SOURCE_2          0.312   selected
+  EXT_SOURCE_1          0.146   selected
+  YEARS_EMPLOYED        0.113   selected
+  DEBT_TO_CREDIT_RATIO  0.103   selected
+  EMPLOYMENT_TO_AGE     0.092   selected
+  RATIO_ACTIVE_TO_TOTAL 0.091   selected
+  YEARS_BIRTH           0.086   selected
+
+The EXT_SOURCE family occupies the top 14 positions, consistent
+with the Phase 2 correlation analysis (EXT_SOURCE_3/2/1 were the
+three highest correlations with TARGET).
+
+================================================================
+6. IV > 0.5 EXCLUSIONS — LEAKAGE INVESTIGATION
+================================================================
+Two features breached the 0.5 ceiling:
+  EXT_1_2_3_MEAN (IV 0.609)
+  EXT_2_3_MEAN   (IV 0.538)
+
+--- INVESTIGATION ---
+Both are deterministic row-wise arithmetic means of
+EXT_SOURCE_1/2/3 — external credit bureau scores supplied at
+application time. They contain no post-decision information,
+no target dependency, and no outcome data. The high IV reflects
+the genuine predictive power of external bureau scores, which
+is precisely what such scores are constructed to provide.
+
+CONCLUSION: false positive on the leakage gate. These are NOT
+leaked features.
+
+--- DECISION: LEAVE EXCLUDED ---
+The exclusion is retained, but on REDUNDANCY grounds rather
+than leakage grounds:
+  1. Twelve other EXT_SOURCE variants are already selected,
+     all derived from the same three underlying scores. The
+     information is already captured; these two add almost
+     nothing new.
+  2. Phase 5 VARCLUS will cluster this entire block and retain
+     one or two representatives regardless — these features
+     would likely be dropped there anyway.
+  3. Keeping the standard 0.5 gate unmodified is cleaner in
+     documentation than "threshold raised to 0.7 to admit two
+     features."
+
+REVISIT CONDITION: if Phase 5 VARCLUS selects a materially
+weaker representative from the EXT_SOURCE cluster than these
+two would have been, this decision is reopened with cluster
+evidence in hand.
+
+================================================================
+7. RARE-BUT-EXTREME FLAGS — BAD RATE vs INFORMATION VALUE
+================================================================
+The most instructive finding of the phase.
+
+Five EDA-mandated features collapsed to n_bins = 1 with IV = 0.000:
+  FLAG_REJECTED_SCOFR       n_bins 1   IV 0.000
+  FLAG_HAS_BAD_DEBT_BUREAU  n_bins 1   IV 0.000
+  FLAG_HAS_MICROLOAN        n_bins 1   IV 0.000
+  FLAG_HAS_MORTGAGE         n_bins 1   IV 0.000
+  BB_FLAG_EVER_DPD_120      n_bins 1   IV 0.000
+
+--- CAUSE ---
+min_bin_size = 0.05. The minority population in each of these
+features sits far below 5% of applicants, so optbinning had no
+legal split available. Everything merged into a single bin, and
+a single bin carries zero information value by definition.
+
+Population sizes from Phase 2:
+  SCOFR fraud rejections : 10,429 records (<1% of applicants)
+  Bad debt bureau records:     20 records
+  Microloans             :  9,005 records
+  Mortgages              : 15,607 records
+
+--- THE UNDERLYING PRINCIPLE ---
+BAD RATE DIFFERENTIAL measures HOW DIFFERENT a group is.
+  SCOFR: 21.10% vs 7.95% population — an enormous difference.
+
+INFORMATION VALUE measures how much that difference MOVES THE
+POPULATION. A 21% bad rate on 0.3% of applicants shifts almost
+nothing in aggregate, so IV approaches zero.
+
+Both measures are correct. IV is stating a true fact: these
+features cannot support a stable, regulator-defensible bin at
+this population size. A dramatic bad rate on a tiny population
+is real but not scorecard-usable.
+
+--- DECISION: DUAL-TRACK SEPARATION ---
+Option chosen: retain these features for the ML CHALLENGER
+track only; exclude from the regulatory scorecard.
+
+  SCORECARD TRACK  : 117 IV-selected, WoE-transformed features.
+                     Conservative, ≥5% bins, monotonic,
+                     regulator-defensible.
+  CHALLENGER TRACK : all 247 preprocessed features, unbinned.
+                     LightGBM has no minimum-bin constraint and
+                     can exploit rare-but-extreme signals such
+                     as SCOFR fraud rejection effectively.
+
+Rejected alternatives:
+  - Lower min_bin_size to ~0.005: would produce non-zero IV but
+    knowingly create unstable bins that may not hold out-of-time.
+    Unacceptable in a regulatory scorecard.
+  - Accept exclusion outright: discards genuine signal that the
+    challenger model can legitimately use.
+
+This is the standard industry treatment and makes the dual-track
+design operationally real rather than nominal.
+
+================================================================
+8. OPEN ITEMS FOR PHASE 5
+================================================================
+1. EXT_SOURCE MULTICOLLINEARITY (high priority)
+   Twelve selected features are arithmetic combinations of three
+   underlying scores. VARCLUS should cluster this block and
+   retain one or two representatives. VIF will otherwise be
+   severe and logistic regression coefficients unstable.
+
+2. DEBT_TO_INCOME (IV 0.007) and CREDIT_TO_INCOME (IV 0.004)
+   Both were EDA-mandated domain ratios and both screened out.
+   Verify whether this reflects genuine weakness or whether the
+   monotonic_trend constraint forced a poor split. Inspect the
+   bin tables before accepting the exclusion.
+
+3. BIN TABLE REVIEW (deferred from section 4)
+   Review optbinning's automatic category merges against the
+   EDA findings, particularly:
+     - NAME_TYPE_SUITE (Other_A / Other_B expected to merge)
+     - CREDIT_TYPE-derived features (rare categories)
+     - ORGANIZATION_TYPE (58 categories, XNA must remain distinct)
+   Confirm each bin meets the 5% threshold and is explainable.
+
+4. n_bins = 1 SURVIVORS
+   EMERGENCYSTATE_MODE (IV 0.023) and HOUSETYPE_MODE (IV 0.021)
+   were SELECTED despite showing n_bins = 1. Investigate — a
+   single-bin feature should not carry non-zero IV.
+
+5. CV-FOLD REFITTING (carried from Phase 2 leakage scan)
+   Binning and WoE in this phase were fitted on the full training
+   set, which is correct for SCREENING. For MODEL TRAINING in
+   Phase 6, the binning must be refitted INSIDE each CV fold to
+   avoid target leakage into the encoding.
+
+
+================================================================
+END OF PHASE 4 FINDINGS
+================================================================
