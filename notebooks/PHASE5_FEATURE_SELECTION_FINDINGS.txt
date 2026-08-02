@@ -1,0 +1,599 @@
+================================================================
+PHASE 5 — MULTIVARIATE SELECTION & DIMENSIONALITY REDUCTION
+FINDINGS, DECISIONS & RATIONALE
+================================================================
+Project : Home Credit Default Risk
+Notebook: 05_feature_selection.ipynb
+Date    : 2026-08-02
+
+Input : woe_train.parquet       (307,511 x 119) — 117 WoE features
+        challenger_train.parquet (307,511 x 249) — 247 raw features
+        binning_summary.csv      — IV values per feature
+Output : scorecard_train.parquet (307,511 x 29) — 27 selected features
+         scorecard_test.parquet  ( 48,744 x 28)
+         scorecard_features.pkl  — final feature list
+
+Result: 117 WoE features → 27 final scorecard features
+
+================================================================
+0. LOOSE ENDS CARRIED FROM PHASE 4 — RESOLVED
+================================================================
+
+--- ISSUE 1: n_bins = 1 features selected with non-zero IV ---
+Observation: EMERGENCYSTATE_MODE (IV 0.023) and HOUSETYPE_MODE
+(IV 0.021) were SELECTED despite showing n_bins = 1, apparently
+contradicting the SCOFR/bad-debt flags which showed n_bins = 1
+with IV = 0.000.
+
+Bin table for EMERGENCYSTATE_MODE:
+  Bin            Count    Count%   Event rate   WoE       IV
+  (-inf, inf)   161,756   52.60%     7.00%     +0.1538   0.0117
+  Special             0    0.00%     0.00%      0.0000   0.0000
+  Missing       145,755   47.40%     9.26%     -0.1503   0.0114
+  Totals        307,511  100.00%     8.07%              0.0231
+
+RESOLUTION: not a bug — a counting convention.
+The n_bins column counts NUMERIC SPLIT INTERVALS only. All
+non-missing values fell into a single interval, hence n_bins = 1.
+The Missing bin is not counted even though it holds 47.4% of the
+population and contributes half the IV.
+
+The feature is genuinely splitting on PRESENT vs MISSING, and
+that split is informative (7.00% vs 9.26% event rate).
+
+Correct reading of the summary table:
+  n_bins = 1 AND IV ≈ 0     → genuinely one bin, no signal
+                              (SCOFR, bad debt, microloan,
+                               mortgage, BB_FLAG_EVER_DPD_120)
+  n_bins = 1 AND IV > 0     → split is missing-vs-present,
+                              i.e. informative missingness
+                              (EMERGENCYSTATE_MODE, HOUSETYPE_MODE)
+
+This VALIDATES the Phase 4 bucket-3 decision. Leaving building
+stats as NaN rather than imputing them allowed the WoE binner to
+extract signal from the missingness itself. EMERGENCYSTATE_MODE's
+entire predictive value is "do we hold building data for this
+applicant" — a proxy for apartment-block dwelling.
+
+--- ISSUE 2: DEBT_TO_INCOME / CREDIT_TO_INCOME screened out ---
+Both were EDA-mandated domain ratios; both fell below the IV 0.02
+gate (0.0067 and 0.0040). Question: did the monotonic constraint
+force a poor split?
+
+Bin table for DEBT_TO_INCOME:
+  Bin              Count   Count%   Event rate    WoE       IV
+  (-inf, 0.06)    16,715    5.44%     6.66%    +0.2069   0.0021
+  [0.06, 0.10)    45,934   14.94%     7.35%    +0.1023   0.0015
+  [0.10, 0.16)    82,746   26.91%     7.75%    +0.0438   0.0005
+  [0.16, 0.20)    52,319   17.01%     8.44%    -0.0488   0.0004
+  [0.20, inf)    109,797   35.71%     8.66%    -0.0761   0.0021
+  Totals         307,511  100.00%     8.07%              0.0067
+
+RESOLUTION: the binning is textbook-correct.
+  - Five bins, all well populated (5.4% to 35.7%)
+  - Perfectly monotonic: event rate rises 6.66% → 8.66%,
+    WoE descends +0.207 → -0.076 without reversal
+  - No missing, no special values
+
+The monotonic constraint did NOT force a bad split. The effect
+size is simply small: only ~2 percentage points of default-rate
+separation from lowest to highest DTI bin.
+
+INTERPRETATION — RANGE RESTRICTION:
+Home Credit already screens on affordability at application.
+Applicants with dangerously high debt-to-income were declined
+before entering this dataset. The surviving population therefore
+has DTI compressed into an acceptable band, and residual
+variation within that band predicts little.
+
+This is a well-known phenomenon in credit scoring: on an
+approved-applicants-only sample, the variables the lender
+screens on show artificially weakened relationships. The
+feature is weak BECAUSE OF HOW THE DATA WAS GENERATED, not
+because affordability is irrelevant to credit risk.
+
+DECISION: accept the exclusion for the scorecard track. The
+feature remains available in the challenger track, where
+LightGBM can use it in interactions (it ranks 26th by gain —
+see section 4).
+
+================================================================
+1. VARCLUS — VARIABLE CLUSTERING
+================================================================
+Tool  : varclushi.VarClusHi
+Config: maxeigval2 = 1.0 (conventional threshold — split a
+        cluster if its second eigenvalue exceeds 1, i.e. it
+        contains more than one distinct dimension)
+        maxclus = None (no cap on cluster count)
+Input : 117 WoE-transformed features
+
+RESULT: 25 clusters formed from 117 features.
+
+This quantifies the multicollinearity flagged at the end of
+Phase 4: 117 nominally distinct features carry approximately
+25 dimensions of information.
+
+--- CLUSTER STRUCTURE (selected) ---
+  Cluster  N_Vars  Eigval1  Eigval2  VarProp   Content
+  -------  ------  -------  -------  -------   ----------------------
+     0        13    11.09     0.92    0.853    Building/property stats
+     1        14    10.65     0.99    0.761    Credit card behaviour
+     2         8     5.70     0.93    0.713    EXT_SOURCE family
+     3         9     5.98     0.91    0.664    Instalment behaviour
+     4         4     3.42     0.30    0.856    EXT_SOURCE (secondary)
+     8         7     5.75     0.75    0.821
+    10         2     1.92     0.08    0.961
+    16         2     1.97     0.03    0.984    Near-perfect duplicates
+    18         3     2.94     0.05    0.981    _AVG/_MODE/_MEDI triplet
+    23         1     1.00     0.00    1.000    Independent feature
+    11         5     2.47     0.99    0.493    Weakly coherent
+    21         3     1.25     0.95    0.417    Weakly coherent
+
+Cluster 0 (13 vars, Eigval1 11.09) confirms the building-stat
+redundancy: APARTMENTS / ELEVATORS / FLOORSMAX / LIVINGAREA each
+appear three times as _AVG, _MODE and _MEDI — three measurements
+of the same underlying property characteristic.
+
+Cluster 1 exposes exact duplication: CC_FLAG_EVER_OVER_LIMIT and
+CC_COUNT_MONTHS_OVER_LIMIT have IDENTICAL RS_Own (0.780288) and
+RS_NC (0.449021). The flag is simply the count binarised. Same
+pattern for the high-utilisation and ATM-drawing flag/count pairs.
+
+Clusters 11 and 21 have second eigenvalues near 1.0 (0.987,
+0.952) and low VarProp (0.49, 0.42) — borderline on the split
+threshold, containing more than one dimension. Noted but not
+acted upon.
+
+================================================================
+2. CLUSTER REPRESENTATIVE SELECTION
+================================================================
+
+--- SELECTION RULE: IV-FIRST, RS_RATIO AS TIEBREAKER ---
+Within each cluster, retain the variable with the highest
+Information Value; break ties on lowest RS_Ratio.
+
+RATIONALE:
+RS_Ratio = (1 - RS_Own) / (1 - RS_NC) measures how well a
+variable represents its cluster STRUCTURALLY. It is a purely
+geometric criterion with no knowledge of the target.
+
+IV measures PREDICTIVE POWER against the target.
+
+For a scorecard, the objective is to predict default, not to
+summarise variance. The cluster member that best predicts the
+outcome is the correct choice; structural representativeness
+is secondary.
+
+--- DISAGREEMENT ANALYSIS ---
+IV-first and RS_Ratio-first disagreed in 20 of 25 clusters.
+Three patterns emerged:
+
+PATTERN A — trivial disagreements (~6 clusters)
+Near-identical variables where the choice is arbitrary:
+  Cluster  0: FLOORSMAX_MEDI (RS .268, IV .0381) vs
+              FLOORSMAX_AVG  (RS .275, IV .0384)
+  Cluster  8: ENTRANCES_MEDI vs ENTRANCES_AVG
+  Cluster 14: EXT_1_2_3_STD vs EXT_2_3_STD
+  Cluster 18: YEARS_BEGINEXPLUATATION_AVG vs _MEDI
+  Cluster 22: NONLIVINGAREA_MEDI vs NONLIVINGAREA_AVG
+Same construct measured two ways. Either choice is defensible.
+
+PATTERN B — IV-first clearly superior (~13 clusters)
+Substantially stronger predictor at modest structural cost:
+  Cluster 21: CODE_GENDER (IV .039) → EXT_SOURCE_1 (IV .146)  3.8x
+  Cluster  6: FLAG_EMPLOYED_SENTINEL (.033) → YEARS_BIRTH (.086) 2.6x
+  Cluster 11: MEAN_AMT_CREDIT_SUM_DEBT (.052)
+                              → DEBT_TO_CREDIT_RATIO (.103)   2.0x
+  Cluster  7: COUNT_BUREAU_CLOSED (.041)
+                              → DAYS_SINCE_FIRST_CREDIT (.078) 1.9x
+  Cluster 20: NAME_EDUCATION_TYPE (.050) → OCCUPATION_TYPE (.080)
+  Cluster 12: CC_MEAN_AMT_BALANCE (.044) → CC_MEAN_UTILISATION (.061)
+  Cluster  5: COUNT_PREV_REFUSED (.055) → REFUSAL_RATE (.070)
+This validates the IV-first rule.
+
+PATTERN C — IV-first FAILURE (1 cluster) → guard added
+  Cluster 1: IV-first selected CREDIT_TO_GOODS
+             (RS_Own 0.010, RS_Ratio 1.010, IV 0.076)
+             over FLAG_HAD_DRAWING (RS_Ratio 0.180, IV 0.025)
+
+An RS_Ratio ABOVE 1 means the variable is better explained by
+a DIFFERENT cluster than its own. CREDIT_TO_GOODS does not
+belong to cluster 1 — it was parked there by default. Selecting
+it would have left cluster 1's actual content (credit card
+behaviour) entirely unrepresented.
+
+--- GUARD IMPLEMENTED ---
+Variables with RS_Ratio >= 1.0 are disqualified as cluster
+representatives, but RETAINED SEPARATELY as "orphans".
+
+Reasoning: a variable with RS_Ratio >= 1 represents nothing —
+but that also means its information is NOT captured by any
+cluster representative. Dropping it would lose signal.
+Retaining it separately is the correct treatment.
+
+Orphans identified:
+  Variable            RS_Own    RS_Ratio    IV
+  CREDIT_TO_GOODS     0.0105    1.0101    0.0761
+  ANNUITY_TO_CREDIT   0.0035    1.0421    0.0290
+
+After the guard, cluster 1 is correctly represented by
+CC_FLAG_EVER_OVER_LIMIT (genuine credit-card behaviour).
+
+--- OUTPUT ---
+  25 cluster representatives
++  2 orphan variables
+= 27 features after VARCLUS
+
+================================================================
+3. STEPWISE VIF
+================================================================
+Threshold: 5.0 (strict)
+Method   : iteratively drop the highest-VIF feature until all
+           remain below threshold
+Input    : 27 features from VARCLUS
+
+RESULT: 0 features dropped. All 27 retained.
+
+--- WHY THRESHOLD 5 RATHER THAN 10 ---
+For a regulatory scorecard, coefficient stability and
+interpretability outweigh marginal predictive gain. VIF 5
+corresponds to R² ≈ 0.80 against the other predictors; beyond
+that, standard errors are inflated enough that coefficient sign
+and magnitude become unreliable — which undermines the entire
+purpose of a scorecard that must be explained and defended.
+
+--- FINAL VIF VALUES ---
+  YEARS_BEGINEXPLUATATION_MEDI      2.27
+  FLOORSMAX_AVG                     2.24
+  NONLIVINGAREA_AVG                 2.11
+  EXT_1_2_3_MIN                     2.10
+  EXT_1_3_MEAN                      2.08
+  ENTRANCES_AVG                     1.94
+  CC_FLAG_EVER_OVER_LIMIT           1.67
+  CC_MEAN_UTILISATION               1.61
+  EXT_SOURCE_1                      1.42
+  EXT_2_3_STD                       1.36
+  YEARS_BIRTH                       1.26
+  INST_COUNT_LATE_LAST_12M          1.23
+  DAYS_SINCE_FIRST_CREDIT           1.22
+  DEBT_TO_CREDIT_RATIO              1.22
+  AMT_GOODS_PRICE                   1.21
+  INST_MEAN_PAYMENT_RATIO           1.16
+  REG_CITY_NOT_WORK_CITY            1.15
+  YEARS_EMPLOYED                    1.15
+  ANNUITY_TO_CREDIT                 1.14
+  REGION_RATING_CLIENT_W_CITY       1.13
+  CREDIT_TO_GOODS                   1.12
+  MEAN_AMT_CREDIT_SUM               1.11
+  INST_MEAN_AMT_INSTALMENT          1.10
+  POSITIVE_DAYS_LAST_PHONE_CHANGE   1.09
+  MEAN_CREDIT_TO_APP_RATIO          1.08
+  OCCUPATION_TYPE                   1.07
+  REFUSAL_RATE                      1.05
+
+Maximum VIF is 2.27 — less than half the strict threshold.
+Most features sit near 1.0, i.e. essentially independent.
+
+--- INTERPRETATION ---
+That VIF dropped nothing is the EXPECTED outcome, not a failure
+of the check. VARCLUS clusters on correlation structure and
+retains one representative per cluster, so the survivors are by
+construction weakly correlated. VIF then finds nothing left to
+remove.
+
+The two methods are complementary but overlapping: VARCLUS
+handles STRUCTURAL redundancy (variables measuring the same
+construct); VIF catches LINEAR redundancy surviving clustering
+(a variable explained by a combination of several others). Here
+VARCLUS did the work and VIF confirmed the result is clean.
+
+Residual mild correlation is visible in the top values — the
+building-stat group (2.27, 2.24, 2.11, 1.94) and the EXT_SOURCE
+pair (2.10, 2.08). VARCLUS split these into separate clusters
+but they still share some underlying signal. Not problematic at
+these levels.
+
+================================================================
+4. FEATURE IMPORTANCE CROSS-CHECK (CHALLENGER TRACK)
+================================================================
+Purpose: independent validation of the scorecard feature set
+using a completely different selection mechanism — gradient
+boosting split gain rather than IV and correlation structure.
+
+Model  : LightGBM, 247 raw (unbinned) challenger features
+Config : n_estimators=1000, learning_rate=0.05, num_leaves=31,
+         min_child_samples=100, subsample=0.8, colsample_bytree=0.8,
+         reg_alpha=0.1, reg_lambda=0.1, is_unbalance=True
+Result : best iteration 530, validation AUC 0.7869,
+         215 of 247 features with non-zero gain
+
+--- DEBUGGING NOTE: EARLY STOPPING ON THE WRONG METRIC ---
+The first two attempts produced a broken model (only 17 features
+with non-zero gain, AUC 0.72). Root cause:
+
+  [100]  valid_0's auc: 0.778186   binary_logloss: 0.546456
+  Early stopping, best iteration is:
+  [1]    valid_0's auc: 0.720858   binary_logloss: 0.27582
+
+Early stopping monitored BOTH auc and binary_logloss and
+defaulted to the first metric tracked — logloss. Logloss was
+0.276 at iteration 1 and rose to 0.546 by iteration 100, so by
+that criterion iteration 1 genuinely was "best". The model
+stopped after a SINGLE TREE, which explains why only 17 features
+had non-zero gain: one tree can only make ~31 splits.
+
+The logloss degradation is caused by is_unbalance=True, which
+reweights classes and destroys probability calibration — raw
+probabilities drift from the observed base rate, inflating
+logloss even as ranking (AUC) improves.
+
+FIX: metric="auc" plus first_metric_only=True on both the
+estimator and the early-stopping callback.
+
+CARRY-FORWARD TO PHASE 6: is_unbalance improves ranking but
+wrecks calibration. Credit risk requires calibrated PDs, not
+merely correct rankings. The production model should train
+WITHOUT is_unbalance and handle imbalance at the decision
+threshold, or apply post-hoc calibration.
+
+--- AGREEMENT: 14 of 27 SCORECARD FEATURES IN LIGHTGBM TOP 30 ---
+Over half the scorecard set independently confirmed by a method
+that knows nothing of IV, WoE or correlation clustering.
+
+Scorecard features in the LightGBM top 30, by gain rank:
+   4  ANNUITY_TO_CREDIT          gain  53,566   IV 0.0290
+   5  EXT_1_3_MEAN               gain  50,444   IV 0.4144
+   6  OCCUPATION_TYPE            gain  41,346   IV 0.0796
+   7  MEAN_CREDIT_TO_APP_RATIO   gain  34,875   IV 0.0715
+   8  CREDIT_TO_GOODS            gain  33,388   IV 0.0761
+   9  EXT_1_2_3_MIN              gain  29,601   IV 0.4643
+  10  YEARS_BIRTH                gain  27,995   IV 0.0857
+  11  YEARS_EMPLOYED             gain  26,875   IV 0.1131
+  13  DEBT_TO_CREDIT_RATIO       gain  24,288   IV 0.1028
+  18  INST_MEAN_PAYMENT_RATIO    gain  22,156   IV 0.0541
+  20  EXT_SOURCE_1               gain  20,919   IV 0.1464
+  22  INST_MEAN_AMT_INSTALMENT   gain  18,829   IV 0.0269
+  23  REFUSAL_RATE               gain  18,297   IV 0.0700
+  28  AMT_GOODS_PRICE            gain  16,324   IV 0.0531
+
+--- SCORECARD FEATURES OUTSIDE THE TOP 30 ---
+Nearly all still carry SUBSTANTIAL gain. Rank 40 of 247, in a
+set where 215 features have non-zero gain, is mid-table — not
+rejection.
+  Feature                          Rank    Gain      IV
+  MEAN_AMT_CREDIT_SUM                32   15,850   0.0257
+  POSITIVE_DAYS_LAST_PHONE_CHANGE    35   14,748   0.0474
+  CC_MEAN_UTILISATION                44   12,070   0.0615
+  DAYS_SINCE_FIRST_CREDIT            45   11,895   0.0782
+  EXT_2_3_STD                        47   11,337   0.0388
+  INST_COUNT_LATE_LAST_12M           72    6,435   0.0618
+  REGION_RATING_CLIENT_W_CITY        79    4,866   0.0512
+  YEARS_BEGINEXPLUATATION_MEDI       97    3,268   0.0293
+  NONLIVINGAREA_AVG                 102    3,105   0.0231
+  ENTRANCES_AVG                     124    2,022   0.0277
+  FLOORSMAX_AVG                     138    1,447   0.0384
+  REG_CITY_NOT_WORK_CITY            194      185   0.0322
+  CC_FLAG_EVER_OVER_LIMIT           217        0   0.0385
+
+ONLY ONE scorecard feature has genuinely ZERO gain:
+CC_FLAG_EVER_OVER_LIMIT (rank 217).
+
+Explanation: CC_MEAN_UTILISATION (rank 44) is present in the
+same dataset and carries the same information continuously.
+Given a continuous utilisation measure, a binary "ever exceeded
+100%" flag adds nothing a tree cannot already split on.
+
+This is a mild redundancy signal for the scorecard as well —
+VARCLUS assigned them to different clusters, but they measure
+the same construct. VIF cleared both (1.67 and 1.61), so no
+action is taken, but the pair is flagged for review if the
+scorecard logistic regression shows an unstable or
+counter-intuitive coefficient on either.
+
+--- DISAGREEMENT: LIGHTGBM TOP 30 NOT IN SCORECARD ---
+  Rank  Feature                     Gain       IV
+     1  EXT_1_2_3_MEAN            247,316   0.6086
+     2  ORGANIZATION_TYPE         220,927   0.0712
+     3  EXT_2_3_MEAN              176,546   0.5385
+    12  POS_MEAN_COMPLETION_RATIO  26,457   0.0199
+    14  AMT_ANNUITY                23,893   0.0137
+    15  DAYS_SINCE_LAST_CREDIT     23,637   0.0824
+    16  INST_MAX_DAYS_LATE         23,373   0.0437
+    17  MEAN_CNT_PAYMENT           22,216   0.0204
+    19  EXT_1_2_MAX                21,200   0.3442
+    21  MEAN_AMT_ANNUITY           20,364   0.0250
+    24  OWN_CAR_AGE                18,026   0.0220
+    25  INST_COUNT_TOTAL           17,787   0.0029
+    26  DEBT_TO_INCOME             16,988   0.0067
+    27  AMT_CREDIT                 16,957   0.0335
+    29  CODE_GENDER                16,275   0.0386
+    30  POSITIVE_DAYS_ID_PUBLISH   16,125   0.0398
+
+Three distinct causes, none of which invalidate the scorecard:
+
+(a) HIGH-CARDINALITY BIAS — ORGANIZATION_TYPE
+    Rank 2 by gain (220,927) but IV only 0.071. With 58
+    categories, a tree has enormous splitting opportunity,
+    which inflates gain. WoE binning compresses it to ~6 bins,
+    and IV reflects only that coarse separation. Gain importance
+    is a known biased estimator favouring high-cardinality
+    features. Not a scorecard failure — a property of the metric.
+
+(b) NON-MONOTONIC AND INTERACTION EFFECTS
+    ANNUITY_TO_CREDIT (rank 4, IV 0.029), DEBT_TO_INCOME
+    (rank 26, IV 0.007), INST_COUNT_TOTAL (rank 25, IV 0.003).
+    Trees exploit non-monotonic relationships and interactions
+    that monotonic WoE binning cannot represent by construction.
+    This is precisely the capability the challenger track exists
+    to provide.
+
+    DEBT_TO_INCOME is notable: it confirms the section-0
+    range-restriction finding from the opposite direction. The
+    linear/monotonic signal is weak (IV 0.007), yet the tree
+    finds usable structure in interactions (rank 26 of 247).
+
+(c) ALREADY-CAPTURED REDUNDANCY — EXT_SOURCE composites
+    EXT_1_2_3_MEAN (rank 1) and EXT_2_3_MEAN (rank 3) are the
+    two features excluded by the Phase 4 IV > 0.5 gate.
+    LightGBM confirms they are the strongest single predictors
+    in the dataset.
+
+    This does NOT reverse the Phase 4 decision. Their
+    information is already in the scorecard via EXT_1_2_3_MIN,
+    EXT_1_3_MEAN and EXT_SOURCE_1 — which is exactly why
+    VARCLUS grouped them into the same clusters. The Phase 4
+    revisit condition ("reopen if VARCLUS selects a materially
+    weaker representative") is NOT triggered: EXT_1_3_MEAN
+    (IV 0.414, gain rank 5) and EXT_1_2_3_MIN (IV 0.464, gain
+    rank 9) are strong representatives on both criteria.
+
+--- CONCLUSION ---
+The two tracks behave exactly as designed. The scorecard
+captures stable, monotonic, interpretable signal. The challenger
+captures additional non-monotonic, interaction-driven and
+high-cardinality signal that a regulatory scorecard cannot
+safely use.
+
+Benchmark established: challenger AUC 0.787 on 247 features.
+The scorecard logistic regression in Phase 6 will be measured
+against this.
+
+================================================================
+5. PCA — DOCUMENTED EXCLUSION
+================================================================
+DECISION: PCA is NOT applied to either track.
+
+--- SCORECARD TRACK: EXCLUDED ON INTERPRETABILITY GROUNDS ---
+Principal components are linear combinations of WoE-transformed
+features with no business meaning. A scorecard must be able to
+state "applicant scored -15 points for high credit utilisation",
+not "-15 points for component 3".
+
+PCA is fundamentally incompatible with the interpretability and
+regulatory-explainability requirements that justify building a
+scorecard in the first place. Adverse-action reasoning, model
+validation and regulatory review all require attribution to
+original, named features.
+
+--- CHALLENGER TRACK: UNNECESSARY ---
+1. Gradient boosting is invariant to monotonic feature
+   transformations and handles correlated features natively
+   through split selection. PCA offers no benefit.
+2. PCA would destroy LightGBM's native categorical handling.
+3. PCA would prevent SHAP explanations at the original-feature
+   level, which Phase 8 requires.
+4. Validation AUC of 0.787 on 247 raw features demonstrates no
+   dimensionality problem requiring reduction.
+
+================================================================
+6. FINAL SCORECARD FEATURE SET (27)
+================================================================
+Saved to: scorecard_train.parquet (307,511 x 29)
+          scorecard_test.parquet  ( 48,744 x 28)
+          scorecard_features.pkl
+
+External credit scores (4)
+  EXT_SOURCE_1                      IV 0.1464   VIF 1.42
+  EXT_1_2_3_MIN                     IV 0.4643   VIF 2.10
+  EXT_1_3_MEAN                      IV 0.4144   VIF 2.08
+  EXT_2_3_STD                       IV 0.0388   VIF 1.36
+
+Demographics & stability (5)
+  YEARS_BIRTH                       IV 0.0857   VIF 1.26
+  YEARS_EMPLOYED                    IV 0.1131   VIF 1.15
+  OCCUPATION_TYPE                   IV 0.0796   VIF 1.07
+  REGION_RATING_CLIENT_W_CITY       IV 0.0512   VIF 1.13
+  REG_CITY_NOT_WORK_CITY            IV 0.0322   VIF 1.15
+  POSITIVE_DAYS_LAST_PHONE_CHANGE   IV 0.0474   VIF 1.09
+
+Loan characteristics (4)
+  AMT_GOODS_PRICE                   IV 0.0531   VIF 1.21
+  CREDIT_TO_GOODS                   IV 0.0761   VIF 1.12   [orphan]
+  ANNUITY_TO_CREDIT                 IV 0.0290   VIF 1.14   [orphan]
+  MEAN_CREDIT_TO_APP_RATIO          IV 0.0715   VIF 1.08
+
+Bureau / external credit history (3)
+  DAYS_SINCE_FIRST_CREDIT           IV 0.0782   VIF 1.22
+  DEBT_TO_CREDIT_RATIO              IV 0.1028   VIF 1.22
+  MEAN_AMT_CREDIT_SUM               IV 0.0257   VIF 1.11
+
+Prior application behaviour (1)
+  REFUSAL_RATE                      IV 0.0700   VIF 1.05
+
+Instalment payment behaviour (3)
+  INST_MEAN_PAYMENT_RATIO           IV 0.0541   VIF 1.16
+  INST_COUNT_LATE_LAST_12M          IV 0.0618   VIF 1.23
+  INST_MEAN_AMT_INSTALMENT          IV 0.0269   VIF 1.10
+
+Credit card behaviour (2)
+  CC_MEAN_UTILISATION               IV 0.0615   VIF 1.61
+  CC_FLAG_EVER_OVER_LIMIT           IV 0.0385   VIF 1.67   [zero LGB gain]
+
+Property / housing (5)
+  FLOORSMAX_AVG                     IV 0.0384   VIF 2.24
+  ENTRANCES_AVG                     IV 0.0277   VIF 1.94
+  NONLIVINGAREA_AVG                 IV 0.0231   VIF 2.11
+  YEARS_BEGINEXPLUATATION_MEDI      IV 0.0293   VIF 2.27
+
+The set spans every major risk dimension identified in Phase 2
+EDA: external scores, demographic stability, affordability,
+external credit history, prior application outcomes, actual
+payment behaviour, revolving credit utilisation, and property
+characteristics. No dimension is unrepresented.
+
+================================================================
+7. REDUCTION SUMMARY
+================================================================
+  Raw application + child tables            →  249 columns
+  Phase 4 IV screening (0.02 - 0.5)         →  117 features
+  Phase 5 VARCLUS (25 clusters + 2 orphans) →   27 features
+  Phase 5 stepwise VIF (threshold 5)        →   27 features
+
+  Overall reduction: 247 modelling features → 27  (89% reduction)
+
+For context on scorecard convention: 27 features is towards the
+upper end of typical practice (most production scorecards use
+10-20), but well within a defensible range. Phase 6 stepwise
+logistic regression may reduce it further on statistical
+significance grounds.
+
+EVENTS-PER-VARIABLE CHECK:
+  24,825 bad cases / 27 features = 919 events per variable.
+  The conventional minimum is 10-20. There is ample data to
+  fit 27 coefficients stably.
+
+================================================================
+8. OPEN ITEMS FOR PHASE 6
+================================================================
+1. CV-FOLD REFITTING (carried from Phase 2 leakage scan and
+   Phase 4). Binning, WoE, medians and winsorisation caps in
+   this project were fitted on the FULL training set. That is
+   correct for SCREENING. For MODEL TRAINING, all target-aware
+   preprocessing must be refitted INSIDE each CV fold.
+
+   Note that VARCLUS and VIF are NOT target-aware and do not
+   require refolding. However, the IV-based representative
+   selection IS target-aware — strictly, the whole selection
+   pipeline should be re-run per fold to obtain an unbiased
+   performance estimate. Document this limitation if a simpler
+   approach is taken.
+
+2. CALIBRATION. is_unbalance=True materially degrades logloss
+   (0.276 → 0.546). Credit risk requires calibrated PDs, not
+   just rankings. Train without class reweighting and manage
+   imbalance at the decision threshold, or apply Platt scaling
+   / isotonic regression post-hoc.
+
+3. CC_FLAG_EVER_OVER_LIMIT vs CC_MEAN_UTILISATION. Zero
+   LightGBM gain for the flag suggests full redundancy with the
+   continuous measure. Watch for an unstable or
+   counter-intuitive coefficient on either in the logistic
+   regression; drop the flag if observed.
+
+4. CHALLENGER BENCHMARK: AUC 0.7869 (LightGBM, 247 features,
+   530 iterations, untuned). The scorecard's performance gap
+   against this figure is the key result of Phase 7.
+
+================================================================
+END OF PHASE 5 FINDINGS
+================================================================
