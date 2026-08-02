@@ -1,0 +1,472 @@
+================================================================
+PHASE 8 — EXPLAINABILITY & SCORECARD OUTPUT
+FINDINGS, DECISIONS & RATIONALE
+================================================================
+Project : Home Credit Default Risk
+Notebook: 08_explainability.ipynb
+Date    : 2026-08-02
+
+Inputs : scorecard_binning.pkl, scorecard_model.pkl,
+         scorecard_features_final.pkl, challenger_model.pkl,
+         holdout_split.pkl
+
+Outputs: scorecard_points_table.csv  — the deployable points card
+         score_to_pd_lookup.csv      — score band to PD reference
+         holdout_scores.parquet      — scored holdout population
+         shap_importance.csv         — challenger SHAP ranking
+         figures/shap_summary.png
+         figures/calibration_curves.png (Phase 7)
+
+PURPOSE: convert the statistical models into artefacts a credit
+operation can actually deploy, and demonstrate concretely what
+post-hoc explainability can and cannot substitute for.
+
+================================================================
+1. POINTS-BASED SCORECARD — SCALING
+================================================================
+
+--- PARAMETERS CHOSEN ---
+  PDO (Points to Double the Odds) : 20
+  Base score                      : 600
+  Base odds at base score         : 50:1 (good:bad)
+
+  factor = PDO / ln(2)                    = 28.8539
+  offset = BASE_SCORE - factor * ln(50)   = 487.1229
+  intercept (alpha)                       = from LogisticRegression
+  n features                              = 24
+
+--- POINTS FORMULA ---
+  points(bin) = -(beta_j * WoE_bin + alpha/n) * factor + offset/n
+
+The NEGATIVE SIGN flips direction so that HIGHER SCORE = LOWER
+RISK, the universal convention (FICO, VantageScore). The
+intercept and offset are divided across features so the
+individual point allocations sum to the correct total score.
+
+--- VALIDATION 1: AUC PRESERVATION ---
+  AUC from points score : 0.7424
+  AUC from model PD     : 0.7424
+Points are a monotonic transformation of log-odds, so they MUST
+reproduce the model's AUC exactly. Any discrepancy would signal
+an arithmetic error in the factor/offset derivation.
+
+--- VALIDATION 2: PDO SCALE VERIFICATION (independent check) ---
+From the score-to-PD lookup table, good:bad odds by score band:
+
+  Score band   Good:bad odds
+  550 - 559        9.90
+  570 - 579       20.18
+  590 - 599       38.36
+  610 - 619       80.24
+
+Each 20-point step approximately DOUBLES the odds
+(9.90 -> 20.18 -> 38.36 -> 80.24), exactly as PDO=20 specifies.
+
+This is a stronger validation than the AUC check: AUC confirms
+the ranking is preserved, but the odds progression confirms the
+SCALE means what it claims. A scorecard whose PDO does not hold
+empirically is misleading to everyone who uses it.
+
+================================================================
+2. FEATURE POINT SWING — OPERATIONAL INFLUENCE
+================================================================
+Swing = max points - min points for a feature. It measures how
+many points a single variable can move an applicant's total
+score, which is the practically relevant measure of influence
+in a deployed card — more so than IV or model coefficient.
+
+  Feature                          min   max   swing
+  -------------------------------  ----  ----  -----
+  EXT_1_2_3_MIN                      4    40     36
+  EXT_1_3_MEAN                      11    34     23
+  REFUSAL_RATE                      13    29     16
+  OCCUPATION_TYPE                   15    30     15
+  INST_MEAN_PAYMENT_RATIO           14    29     15
+  REGION_RATING_CLIENT_W_CITY       17    31     14
+  CREDIT_TO_GOODS                   14    28     14
+  MEAN_CREDIT_TO_APP_RATIO          15    29     14
+  INST_MEAN_AMT_INSTALMENT          16    28     12
+  ANNUITY_TO_CREDIT                 22    34     12
+  YEARS_EMPLOYED                    19    31     12
+  DEBT_TO_CREDIT_RATIO              16    28     12
+  CC_MEAN_UTILISATION               15    27     12
+  MEAN_AMT_CREDIT_SUM               20    30     10
+  POSITIVE_DAYS_LAST_PHONE_CHANGE   21    29      8
+  INST_COUNT_LATE_LAST_12M          18    25      7
+  FLOORSMAX_AVG                     22    28      6
+  CC_FLAG_EVER_OVER_LIMIT           20    24      4
+  YEARS_BEGINEXPLUATATION_MEDI      22    26      4
+  ENTRANCES_AVG                     22    25      3
+  DAYS_SINCE_FIRST_CREDIT           21    24      3
+  YEARS_BIRTH                       22    25      3
+  REG_CITY_NOT_WORK_CITY            22    24      2
+  AMT_GOODS_PRICE                   23    25      2
+
+  Theoretical score range: 424 to 683 (259 points)
+  Observed holdout range : 456 to 657
+
+--- FINDING: EXT_1_2_3_MIN DOMINATES ---
+36-point swing, nearly double the next feature. Consistent with
+every prior phase: external bureau scores are the strongest
+signal in this dataset.
+
+--- FINDING: SEVEN FEATURES ARE PRACTICALLY INERT ---
+Seven features have swings of 4 points or less on a 259-point
+scale. A 2-point swing cannot change an accept/decline decision
+at any realistic cut-off.
+
+  CC_FLAG_EVER_OVER_LIMIT        4
+  YEARS_BEGINEXPLUATATION_MEDI   4
+  ENTRANCES_AVG                  3
+  DAYS_SINCE_FIRST_CREDIT        3
+  YEARS_BIRTH                    3
+  REG_CITY_NOT_WORK_CITY         2
+  AMT_GOODS_PRICE                2
+
+These are STATISTICALLY SIGNIFICANT (they survived the Phase 6
+pruning on p-value and sign) but OPERATIONALLY NEGLIGIBLE. That
+distinction is worth carrying: statistical significance on
+246,008 rows is easy to achieve and says nothing about practical
+materiality.
+
+A future simplification exercise could remove all seven with
+minimal performance loss, producing a 17-feature card. Retained
+here because they cost nothing and each has a defensible
+business rationale.
+
+--- RESOLVES PHASE 5 / PHASE 7 OPEN ITEM ---
+CC_FLAG_EVER_OVER_LIMIT was flagged in Phase 5 for ZERO LightGBM
+gain (redundant with CC_MEAN_UTILISATION) and carried forward for
+confirmation. Its 4-point swing versus CC_MEAN_UTILISATION's 12
+confirms the redundancy from a third independent angle. All
+three diagnostics agree.
+
+--- UNEXPECTED: YEARS_BIRTH AT 3 POINTS ---
+Age is normally a material scorecard variable. IV was 0.086 and
+LightGBM ranked it 10th by gain, yet it barely moves the score
+in the multivariate WoE model. Most plausible explanation:
+YEARS_EMPLOYED (12-point swing) and DAYS_SINCE_FIRST_CREDIT
+already capture the underlying life-stage signal, leaving age
+little unique contribution.
+
+================================================================
+3. BIN-LEVEL POINTS TABLES — BUSINESS REVIEW
+================================================================
+This section discharges the commitment made in Phase 4: having
+allowed optbinning to group categories automatically rather than
+pre-grouping manually, the resulting bins must be REVIEWED and
+confirmed explainable.
+
+--- EXT_1_2_3_MIN (beta -0.5715) ---
+  Bin              Pop%    Event rate    WoE      Points
+  (-inf, 0.13)     8.2%      22.38%    -1.1891       4
+  [0.13, 0.25)    15.9%      13.10%    -0.5403      14
+  [0.25, 0.31)    10.4%       9.42%    -0.1686      20
+  [0.31, 0.43)    19.8%       6.93%     0.1656      26
+  [0.43, 0.56)    21.8%       4.83%     0.5490      32
+  [0.56, inf)     23.8%       3.10%     1.0105      40
+Perfect monotonic progression, healthy bin populations (8-24%).
+Event rate falls 22.4% -> 3.1% as points rise 4 -> 40.
+
+--- REFUSAL_RATE (beta -0.5228) ---
+  Bin              Pop%    Event rate    WoE      Points
+  (-inf, 0.07)    62.8%       7.05%     0.1462      25
+  [0.07, 0.15)     5.0%       7.51%     0.0784      24
+  [0.15, 0.24)     6.6%       8.34%    -0.0361      23
+  [0.24, 0.32)     5.7%       9.67%    -0.1983      20
+  [0.32, 0.45)     7.2%      10.93%    -0.3342      18
+  [0.45, inf)      7.4%      14.51%    -0.6587      13
+  Missing          5.4%       5.83%     0.3497      29
+Monotonic across populated bins. Clear story: applicants never
+refused by Home Credit score 25; those refused 45%+ of the time
+score 13.
+
+NOTE THE MISSING BIN — 29 points, the HIGHEST in the feature.
+Missing means NO PREVIOUS APPLICATIONS AT ALL. This is the
+Phase 2 EDA finding surfacing in the deployed artefact:
+first-time applicants have a 5.83% bad rate versus 8.07%
+population, because Home Credit screens new customers carefully.
+The scorecard correctly rewards them.
+
+--- OCCUPATION_TYPE (beta -0.6375) ---
+  Grouped category                              Pop%   Event   Points
+  Accountants, Managers                        10.1%   5.76%     30
+  High skill tech, Core staff, IT, Medicine,
+    HR, Private service, Secretaries, Realty   17.4%   6.38%     28
+  Sales staff, Cleaning staff                  11.9%   9.66%     20
+  Cooking staff, Laborers, Security staff      22.1%  10.60%     18
+  Waiters/barmen, Drivers, Low-skill Laborers   7.2%  11.82%     15
+  Missing                                      31.4%   6.52%     27
+
+optbinning's automatic merging produced a coherent SKILL AND
+STABILITY GRADIENT, not an arbitrary statistical grouping. This
+would be straightforward to defend in model documentation.
+The Phase 4 decision to automate grouping with review-after is
+vindicated.
+
+CAVEAT FOR DOCUMENTATION: the Missing bin holds 31.4% of
+applicants and scores 27 — near the top of the range. "Missing
+occupation" intuitively sounds risky, yet the bad rate is 6.52%,
+below population. This is the PENSIONER population identified in
+Phase 2 via the DAYS_EMPLOYED = 365243 sentinel (5.40% bad rate
+versus 8.66% for employed). The result is CORRECT but reads
+counterintuitively on the page and requires an explanatory note.
+
+--- CC_MEAN_UTILISATION (beta -0.3969) ---
+  Bin              Pop%    Event rate    WoE      Points
+  (-inf, 0.18)    11.6%       5.72%     0.3706      27
+  [0.18, 0.56)     6.5%       8.66%    -0.0763      22
+  [0.56, inf)      7.0%      14.92%    -0.6918      15
+  Missing         74.9%       7.75%     0.0448      24
+Utilisation above 56% costs 12 points relative to under 18% —
+intuitive and easily defended. The Missing bin (no credit card,
+75% of applicants) sits mid-range at 24 with a bad rate close to
+population: correct, since holding no card is neither good nor
+bad news.
+
+================================================================
+4. SCORE TO PD LOOKUP TABLE
+================================================================
+The deployment reference: given a score, what is the expected
+default rate, the good:bad odds, and what proportion of the
+population falls below.
+
+ score_from  score_to     n   bad_rate  good_bad_odds  cum_pct_pop
+        470       479    30     0.6000         0.6667       0.0006
+        480       489    97     0.4742         1.1087       0.0022
+        490       499   301     0.3754         1.6637       0.0071
+        500       509   804     0.3197         2.1284       0.0201
+        510       519  1483     0.2549         2.9233       0.0443
+        520       529  2702     0.2080         3.8078       0.0882
+        530       539  4092     0.1696         4.8963       0.1547
+        540       549  5678     0.1279         6.8209       0.2470
+        550       559  7028     0.0918         9.8961       0.3613
+        560       569  8380     0.0660        14.1537       0.4976
+        570       579  8915     0.0472        20.1758       0.6425
+        580       589  8192     0.0339        28.4676       0.7757
+        590       599  6613     0.0254        38.3631       0.8832
+        600       609  4257     0.0157        62.5373       0.9525
+        610       619  2031     0.0123        80.2400       0.9855
+        620       629   719     0.0083       118.8333       0.9972
+        630       639   151     0.0132        74.5000       0.9996
+
+--- MONOTONICITY BREAK AT THE TOP — AND WHY IT IS NOT A DEFECT ---
+Bands 620-629 (odds 118.8) and 630-639 (odds 74.5) reverse.
+Sample sizes are 719 and 151, with 6 and 2 bads respectively.
+With 151 observations a single extra default swings the rate
+materially. This is SAMPLING NOISE, not model failure.
+
+Standard practice is to CAP the published scorecard range where
+volumes thin out. Recommendation: publish 630+ as a single
+top band rather than pretending to resolve differences there.
+
+--- OPERATIONAL READING ---
+  Below 500     0.7% of book, 37-60% bad rate — auto-decline zone
+  Score 535     Phase 7's 90%-approval threshold; ~15.5% below
+  550 - 590     the dense middle, 36% -> 88% cumulative;
+                cut-off placement here has the largest volume
+                consequences
+  Above 600     4.7% of book, under 1.6% bad rate — super-prime,
+                candidates for preferential pricing
+
+================================================================
+5. SHAP ON THE CHALLENGER
+================================================================
+Method: TreeExplainer on a 5,000-row random sample of the
+holdout (full 61,503 rows unnecessary and slow).
+
+--- GLOBAL IMPORTANCE (top 20 by mean |SHAP|) ---
+  Rank  Feature                       mean|SHAP|  In scorecard
+     1  EXT_1_2_3_MEAN                   0.2278       No
+     2  EXT_2_3_MEAN                     0.1165       No
+     3  INST_COUNT_TOTAL                 0.1165       No
+     4  CREDIT_TO_GOODS                  0.1125       YES
+     5  CODE_GENDER                      0.1094       No
+     6  AMT_ANNUITY                      0.0997       No
+     7  ANNUITY_TO_CREDIT                0.0952       YES
+     8  ORGANIZATION_TYPE                0.0933       No
+     9  MEAN_CREDIT_TO_APP_RATIO         0.0873       YES
+    10  OWN_CAR_AGE                      0.0853       No
+    11  POS_MEAN_COMPLETION_RATIO        0.0818       No
+    12  NAME_EDUCATION_TYPE              0.0740       No
+    13  NAME_FAMILY_STATUS               0.0708       No
+    14  MEAN_AMT_ANNUITY                 0.0687       No
+    15  DEBT_TO_CREDIT_RATIO             0.0679       YES
+    16  MEAN_CNT_PAYMENT                 0.0629       No
+    17  EXT_1_2_3_MAX                    0.0612       No
+    18  INST_MAX_DAYS_LATE               0.0612       No
+    19  YEARS_BIRTH                      0.0590       YES
+    20  EXT_1_3_MEAN                     0.0564       YES
+
+  Scorecard features in SHAP top 20: 6 of 24
+
+--- WHY AGREEMENT IS LOWER THAN THE PHASE 5 GAIN COMPARISON ---
+Phase 5's LightGBM gain cross-check showed 14 of 27 scorecard
+features in the top 30. SHAP shows only 6 of 24 in the top 20.
+This is expected, not concerning:
+
+SHAP measures AVERAGE MARGINAL CONTRIBUTION across the model,
+which rewards features the tree uses frequently in INTERACTIONS.
+The scorecard selected on STANDALONE MONOTONIC SIGNAL after
+correlation clustering.
+
+Clearest illustration: INST_COUNT_TOTAL ranks 3rd by SHAP with
+an IV of just 0.0029. It contributes almost nothing on its own
+but appears constantly in interaction splits.
+
+--- FINDING: CODE_GENDER RANKS 5TH ---
+This is the most consequential result of the SHAP analysis.
+
+CODE_GENDER is the 5th most influential feature in the
+challenger (mean |SHAP| 0.1094). The scorecard excluded it in
+Phase 5 — VARCLUS cluster 21 selected EXT_SOURCE_1 over
+CODE_GENDER on IV (0.146 vs 0.039).
+
+Gender is a PROTECTED CHARACTERISTIC under EU anti-
+discrimination law and the US Equal Credit Opportunity Act
+(ECOA). A production model in which gender is the 5th strongest
+driver would face serious regulatory challenge regardless of
+its predictive validity.
+
+The individual explanations make this concrete: for the LOWEST
+RISK applicant examined, CODE_GENDER = M contributed +0.186 to
+the log-odds — actively pushing an otherwise excellent applicant
+toward decline on the basis of sex.
+
+The scorecard's exclusion of gender was arrived at INCIDENTALLY
+through IV-based cluster representative selection, not by
+design. It is nonetheless a genuine advantage, and it argues for
+adding an EXPLICIT PROTECTED-ATTRIBUTE EXCLUSION step to the
+pipeline rather than relying on selection to remove such
+features by chance.
+
+--- NOTE ON READING THE BEESWARM PLOT ---
+Categorical features (CODE_GENDER, ORGANIZATION_TYPE,
+NAME_EDUCATION_TYPE, NAME_FAMILY_STATUS) appear GREY because
+SHAP cannot map categories to a continuous colour gradient.
+Only their spread is interpretable, not the value-to-impact
+direction.
+
+================================================================
+6. INDIVIDUAL EXPLANATIONS — SHAP vs REASON CODES
+================================================================
+The central demonstration of the phase: the same decision,
+explained two ways, with very different usability.
+
+--- SHAP: HIGHEST-RISK APPLICANT (actual TARGET = 0) ---
+  Feature                        Value          SHAP
+  EXT_1_2_3_MEAN                 0.0615        0.5700
+  MAX_AMT_CREDIT_MAX_OVERDUE    75,627.00      0.4165
+  POSITIVE_DAYS_REGISTRATION     2.0000        0.3619
+  EXT_2_3_MEAN                   0.0615        0.3614
+  REFUSAL_RATE                   0.8421        0.3333
+  EXT_1_2_3_MIN                  0.0510        0.2529
+  CREDIT_TO_GOODS                1.2112        0.1808
+  INST_COUNT_TOTAL              10.0000        0.1805
+  CODE_GENDER                    M             0.1410
+  MEAN_CNT_PAYMENT              25.6923        0.1219
+
+--- SHAP: LOWEST-RISK APPLICANT (actual TARGET = 0) ---
+  ORGANIZATION_TYPE              Military     -0.4760
+  EXT_1_2_3_MEAN                 0.7606       -0.4159
+  OWN_CAR_AGE                    3.0000       -0.2415
+  NAME_FAMILY_STATUS             Separated     0.2111
+  CODE_GENDER                    M             0.1860
+  EXT_2_3_MEAN                   0.7606       -0.1623
+  NAME_EDUCATION_TYPE            Higher ed    -0.1505
+  YEARS_EMPLOYED                12.2466       -0.1061
+
+--- REASON CODES: DECLINED APPLICANT (score 523) ---
+  Feature                    Value    Points  Max    Points lost
+  EXT_1_2_3_MIN             0.0701       4     40         36
+  EXT_1_3_MEAN              0.3114      16     34         18
+  MEAN_CREDIT_TO_APP_RATIO  1.2022      15     29         14
+  ANNUITY_TO_CREDIT         0.0544      22     34         12
+
+Translated to ECOA-compliant adverse action notices:
+  1. "Low external credit bureau score"
+  2. "Insufficient external credit history strength"
+  3. "Requested credit amount high relative to previous
+      approvals"
+  4. "Loan payment high relative to loan amount"
+
+--- THE DIFFERENCE, STATED PLAINLY ---
+SHAP is honest and complete but frequently unusable as customer
+communication:
+
+  POSITIVE_DAYS_REGISTRATION = 2 contributes +0.36 log-odds.
+  What does one tell the applicant? "Your registration was
+  updated 2 days before you applied"?
+
+  MAX_AMT_CREDIT_MAX_OVERDUE = 75,627 is the WINSORISATION CAP
+  applied in Phase 4. The true value was higher and was clipped.
+  Explaining a preprocessing artefact to a customer is not
+  possible.
+
+Reason codes are specific, actionable, and tell the applicant
+what to change.
+
+CONCLUSION: SHAP explains THE MODEL TO A DATA SCIENTIST. Reason
+codes explain THE DECISION TO THE CUSTOMER. Regulation requires
+the second. Post-hoc explainability is a genuine tool but is
+NOT a substitute for a coefficient-based reason code framework.
+
+--- METHODOLOGICAL NOTE ---
+Both extreme applicants examined have TARGET = 0 — the
+"highest risk" applicant did not default. This is not a model
+failure. At an 8% base rate, even the riskiest predictions are
+usually wrong on any individual case. It illustrates that PD
+models RANK POPULATIONS; they do not CLASSIFY INDIVIDUALS.
+
+================================================================
+7. DELIVERABLES PRODUCED
+================================================================
+  scorecard_points_table.csv   Every feature, every bin, with
+                               population share, event rate, WoE,
+                               beta and assigned points. The card
+                               a credit operation deploys.
+
+  score_to_pd_lookup.csv       Score band -> bad rate, good:bad
+                               odds, cumulative population.
+
+  holdout_scores.parquet       SK_ID_CURR, score, TARGET for the
+                               full 61,503-row holdout.
+
+  shap_importance.csv          Challenger global SHAP ranking.
+
+  figures/shap_summary.png     Beeswarm plot, top 20 features.
+
+================================================================
+8. OPEN ITEMS FOR PHASES 9-11
+================================================================
+1. PROTECTED-ATTRIBUTE EXCLUSION. CODE_GENDER ranking 5th by
+   SHAP in the challenger is a fairness exposure. Add an
+   explicit exclusion list (gender, and review age, marital
+   status, region proxies) as a pipeline step rather than
+   relying on IV selection to remove them incidentally.
+   Consider a formal fairness audit: approval rate and bad rate
+   parity across protected groups.
+
+2. TOP-BAND CAPPING. Publish scores of 630+ as a single band.
+   The 620-629 / 630-639 odds reversal is sampling noise on
+   151 observations and should not appear in a published table.
+
+3. SCORECARD SIMPLIFICATION (optional). Seven features have
+   swings of 4 points or fewer and could be removed with
+   negligible performance loss, yielding a 17-feature card.
+   Would need re-validation of AUC, KS and monotonicity.
+
+4. DEPLOYMENT ARTEFACTS (Phase 10). The FastAPI service must
+   apply, in order: sentinel replacement -> winsorisation
+   (train_caps.pkl) -> imputation (train_medians.pkl) -> WoE
+   (scorecard_binning.pkl) -> logistic regression
+   (scorecard_model.pkl) -> points conversion. Every fitted
+   object is persisted; the ORDER is the critical detail.
+
+5. REASON CODE MAPPING TABLE. Formalise the feature-to-
+   adverse-action-text mapping used ad hoc in section 6 into a
+   lookup that the API can return alongside the score.
+
+================================================================
+END OF PHASE 8 FINDINGS
+================================================================
