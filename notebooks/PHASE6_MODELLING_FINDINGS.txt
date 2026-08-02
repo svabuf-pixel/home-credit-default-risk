@@ -1,0 +1,524 @@
+================================================================
+PHASE 6 — MODELLING
+FINDINGS, DECISIONS & RATIONALE
+================================================================
+Project : Home Credit Default Risk
+Notebook: 06_modelling.ipynb
+Date    : 2026-08-02
+
+Inputs : preprocessed_train.parquet  (307,511 x 249) — raw values
+         challenger_train.parquet    (307,511 x 249) — raw values
+         scorecard_features.pkl      — 27 features from Phase 5
+
+Outputs: holdout_split.pkl            — reproducible 80/20 split
+         scorecard_binning.pkl        — fitted BinningProcess (24 feat)
+         scorecard_model.pkl          — fitted LogisticRegression
+         scorecard_features_final.pkl — 24 final features
+         scorecard_logit_sm.pkl       — statsmodels fit (for Phase 8)
+         challenger_model.pkl         — tuned LightGBM
+         challenger_params.pkl        — Optuna best params
+         holdout_predictions.parquet  — aligned predictions both tracks
+
+HEADLINE RESULT (untouched holdout, n=61,503):
+  Scorecard  (24 features)   AUC 0.7424   Gini 0.4848
+  Challenger (247 features)  AUC 0.7847   Gini 0.5694
+  Interpretability cost      0.0423 AUC / 0.0846 Gini
+
+================================================================
+1. VALIDATION STRATEGY — THE CENTRAL DECISION OF THE PHASE
+================================================================
+
+--- THE PROBLEM ---
+All target-aware preprocessing in Phases 4-5 (binning, WoE
+encoding, median imputation, winsorisation caps, IV-based feature
+selection) was fitted on the FULL training set. That is correct
+for SCREENING, but if a model is then cross-validated on those
+same pre-computed WoE values, every validation fold has already
+seen its own target through the encoding. The resulting CV
+estimate is optimistically biased.
+
+--- OPTIONS CONSIDERED ---
+A. Full nested pipeline — refit binning, WoE, imputation,
+   winsorisation, VARCLUS and IV selection inside every fold.
+   Methodologically pure, but slow, and the feature set would
+   differ per fold, making the "final" scorecard ambiguous.
+
+B. Freeze feature selection, refit encoding per fold — keep the
+   27 features fixed, but refit BinningProcess inside each fold.
+   Treats feature selection as an analyst decision and encoding
+   as a fitted transformation that must respect fold boundaries.
+
+C. Use pre-computed WoE as-is — fastest, knowingly optimistic.
+
+--- DECISION: OPTION B PLUS A GENUINE HOLDOUT ---
+1. Carve a 20% holdout from the training data BEFORE any
+   modelling. Never touched until final evaluation.
+2. On the remaining 80% (development set), run 5-fold CV with
+   WoE refitted inside each fold.
+3. Report the holdout figure as the honest performance estimate.
+
+Note: the Kaggle application_test.csv cannot serve as a holdout —
+it has no TARGET, so nothing can be scored against it.
+
+--- THE SPLIT ---
+  Development set : 246,008 rows   bad rate 0.0807
+  Holdout set     :  61,503 rows   bad rate 0.0807
+  Stratified on TARGET, random_state=42, IDs persisted to
+  holdout_split.pkl for reproducibility and audit.
+
+Events per variable on development: 19,860 bads / 24 features
+= 828. Conventional minimum is 10-20. Ample data.
+
+--- WHY THIS MATTERED ---
+CV → holdout drop was only ~0.004 AUC for BOTH models
+(scorecard 0.7467 → 0.7424; challenger 0.7881 → 0.7847).
+Had the pre-computed WoE been reused for CV, the CV figure
+would have been inflated and the holdout drop far larger.
+The discipline is validated by the result.
+
+--- ACKNOWLEDGED LIMITATION ---
+VARCLUS and VIF are not target-aware and do not require
+refolding. However the IV-based cluster-representative
+selection IS target-aware. Strictly, the entire selection
+pipeline should be re-run per fold for a fully unbiased
+estimate. The holdout provides the honest number that
+compensates for this.
+
+================================================================
+2. SCORECARD TRACK — LOGISTIC REGRESSION ON WoE
+================================================================
+Input : 27 features from Phase 5, RAW values (not pre-WoE)
+Method: BinningProcess refitted per fold, LogisticRegression
+        with no regularisation, no class weighting
+
+--- CONFIGURATION RATIONALE ---
+No regularisation (C=np.inf): a regulatory scorecard requires
+raw maximum-likelihood coefficients. Regularisation shrinks
+coefficients in ways that make the points-per-bin table harder
+to justify. Overfitting is already controlled by feature
+selection (247 → 24) and the VIF check.
+
+No class weighting: WoE-transformed logistic regression on the
+natural class distribution produces well-calibrated PDs
+directly, which is what credit risk requires. (See section 3
+for the empirical evidence.)
+
+--- INITIAL RESULT: 27 FEATURES ---
+  Fold 1  train 0.7503   valid 0.7480
+  Fold 2  train 0.7501   valid 0.7482
+  Fold 3  train 0.7507   valid 0.7446
+  Fold 4  train 0.7509   valid 0.7439
+  Fold 5  train 0.7496   valid 0.7502
+  Mean valid AUC 0.7470 (+/- 0.0027)   Gini 0.4940
+
+Train-validation gap is ~0.002 across all folds — a stable,
+non-overfit model.
+
+--- NOTE ON FOLD COUNT ---
+Considered increasing beyond 5 folds. Rejected: more folds
+improve the PRECISION OF THE ESTIMATE, not the model itself.
+Standard deviation was already 0.0027; more folds would give
+0.747 +/- 0.002 instead of +/- 0.003, with an identical model.
+AUC is lifted by better features or a better algorithm, not
+by resampling more finely.
+
+================================================================
+3. COEFFICIENT DIAGNOSTICS AND STEPWISE PRUNING
+================================================================
+
+--- SIGN CONVENTION (initially misread) ---
+An initial reading flagged 25 of 27 coefficients as
+"wrong-signed" because they were negative. That was based on
+the assumption that WoE is constructed so higher = lower risk,
+giving positive coefficients.
+
+optbinning uses the OPPOSITE convention: WoE = log(event /
+non-event), so HIGHER WoE = HIGHER risk... but the bin tables
+confirm the practical effect is that the lower-event-rate bin
+receives POSITIVE WoE:
+
+  EMERGENCYSTATE_MODE bin table:
+    (-inf, inf)   event rate 7.00%   WoE +0.1538
+    Missing       event rate 9.26%   WoE -0.1503
+
+So higher WoE = lower risk, and the EXPECTED coefficient sign
+is NEGATIVE. That 25 of 27 shared the same sign was the
+consistency one wants, not a defect.
+
+CORRECTED RULE FOR THIS PROJECT:
+  negative coefficient = correct
+  positive coefficient = suspect (sign reversal)
+
+Lesson: always verify sign convention against an actual bin
+table rather than assuming the library's definition.
+
+--- GENUINE ISSUES FOUND (27-feature model) ---
+Pseudo R-squared 0.1123
+
+  WRONG SIGN (positive coefficient):
+    EXT_2_3_STD          coef +0.3632   p 0.0000   (significant)
+    NONLIVINGAREA_AVG    coef +0.1604   p 0.2055   (not sig)
+
+  NOT SIGNIFICANT (p >= 0.05):
+    NONLIVINGAREA_AVG    p 0.2055
+    EXT_SOURCE_1         coef -0.0083   p 0.7298
+
+--- DIAGNOSIS ---
+EXT_SOURCE_1 is the notable case. It has IV 0.146, ranks 20th
+by LightGBM gain, and is a known strong univariate predictor —
+yet its coefficient collapses to effectively zero (-0.008) in
+the multivariate model.
+
+This is conditional redundancy: EXT_1_2_3_MIN and EXT_1_3_MEAN
+already contain EXT_SOURCE_1's information, leaving nothing
+unique for it to explain. VIF (1.42) did not catch this
+because VIF measures LINEAR DEPENDENCE, not CONDITIONAL
+CONTRIBUTION. The two diagnostics are complementary.
+
+EXT_2_3_STD flipping sign is classic suppression — fine
+univariately (IV 0.039) but reverses once the EXT_SOURCE
+level features enter the model.
+
+--- ACTION: DROPPED 3 FEATURES ---
+  EXT_SOURCE_1       — no conditional contribution
+  NONLIVINGAREA_AVG  — no contribution AND wrong sign
+  EXT_2_3_STD        — wrong sign (suppression)
+
+--- RESULT: 24-FEATURE MODEL ---
+  Pseudo R-squared  0.1118  (from 0.1123)
+  Development AUC   0.7498
+  Non-significant   0
+  Wrong sign        0
+
+Re-run cross-validation:
+  Fold 1  0.7473    Fold 2  0.7480    Fold 3  0.7445
+  Fold 4  0.7438    Fold 5  0.7500
+
+  27 features -> mean valid AUC 0.7470 (+/- 0.0027)
+  24 features -> mean valid AUC 0.7467 (+/- 0.0023)
+
+Difference of 0.0003 — well inside the fold variation and
+statistically indistinguishable. Three features removed at no
+measurable cost, producing a model where every coefficient is
+significant and correctly signed, and fold stability slightly
+improved.
+
+For a regulatory scorecard this is an unambiguous improvement:
+simpler to validate, simpler to explain, and no coefficient a
+reviewer can challenge.
+
+================================================================
+4. CHALLENGER TRACK — CALIBRATION EXPERIMENT
+================================================================
+Purpose: test the Phase 5 hypothesis that is_unbalance=True
+lifts ranking but destroys probability calibration.
+
+Method: identical 5-fold CV, identical base parameters, only
+the class-weighting flag varied.
+
+  Config          AUC       LogLoss    Brier
+  --------------  --------  ---------  --------
+  unweighted      0.7852    0.2377     0.06604
+  is_unbalance    0.7841    0.4976     0.16560
+
+--- FINDING: HYPOTHESIS CONFIRMED ---
+AUC difference is 0.0011 — within fold noise. Class reweighting
+bought nothing in ranking quality.
+
+Calibration is 2.5x worse. Brier rises from 0.066 to 0.166;
+logloss more than doubles.
+
+--- MECHANISM ---
+is_unbalance reweights the bad class by approximately 11.4x
+(the good:bad ratio), so the model optimises as though the base
+rate were ~50% rather than 8.07%. Its output probabilities are
+calibrated to that synthetic population, not the real one — it
+may predict 45% for an applicant whose true PD is 12%. Rankings
+survive because relative order is preserved; absolute
+probabilities become meaningless.
+
+--- WHY THIS MATTERS IN CREDIT RISK SPECIFICALLY ---
+PD feeds directly into:
+  - Expected Loss = PD x LGD x EAD
+  - IFRS 9 / CECL provisioning
+  - Risk-based pricing
+A model predicting 45% where the true PD is 12% would overstate
+provisions by nearly 4x. Ranking-only performance is
+insufficient; calibrated probabilities are a hard requirement.
+
+--- DECISION ---
+Train UNWEIGHTED. Handle class imbalance at the DECISION
+THRESHOLD in Phase 7 rather than by distorting the training
+objective.
+
+BENCHMARK: predicting the base rate (0.0807) for every applicant
+gives Brier 0.0742. Both final models beat this; the
+is_unbalance config (0.1656) is more than twice as bad as doing
+nothing.
+
+================================================================
+5. CHALLENGER TRACK — OPTUNA HYPERPARAMETER TUNING
+================================================================
+Trials : 20 (100 model fits — 5-fold CV per trial)
+Runtime: ~2.5 hours
+Objective: maximise mean 5-fold CV AUC
+
+  Baseline (untuned)  CV AUC 0.7852
+  Best trial          CV AUC 0.7881
+  Gain                       0.0029  (~0.6 Gini points)
+
+--- BEST PARAMETERS ---
+  learning_rate      0.0254
+  num_leaves         49
+  max_depth          4
+  min_child_samples  254
+  subsample          0.748
+  colsample_bytree   0.467
+  reg_alpha          0.207
+  reg_lambda         1.307
+
+--- INTERPRETATION ---
+Every chosen parameter pushes toward MORE REGULARISATION and
+LESS COMPLEXITY:
+  - max_depth=4 binds hard (a depth-4 tree holds at most 16
+    leaves, so num_leaves=49 is never reached) — Optuna
+    effectively selected depth-4 stumps
+  - min_child_samples=254 requires large leaf populations
+  - colsample_bytree=0.467 shows each tree under half the features
+  - learning_rate halved from the baseline
+
+This is the signature of a dataset where signal is BROAD AND
+SHALLOW rather than deep and interaction-heavy — consistent
+with the Phase 5 finding that 215 of 247 features carried
+non-zero gain with no single feature dominating after the
+EXT_SOURCE block.
+
+It also implies limited headroom in further tuning: the
+optimiser is asking for a simpler model, not a more elaborate
+one. Additional gains would come from feature engineering or
+ensembling, not hyperparameters.
+
+Final model: best iteration 1452 (early stopping on an inner
+15% split of the development set; the holdout remained
+untouched).
+
+================================================================
+6. BUG FOUND: POSITIONAL MISALIGNMENT IN HOLDOUT COMPARISON
+================================================================
+
+--- SYMPTOM ---
+First holdout evaluation returned:
+  Scorecard   AUC 0.7424
+  Challenger  AUC 0.4987   <-- exactly random
+
+A model scoring 0.788 in cross-validation cannot predict at
+chance level on data from the same distribution.
+
+--- DIAGNOSIS ---
+  y_holdout rows : 61,503     yc_hold rows : 61,503
+  Bad rate        : 0.0807     0.0807
+  Same IDs, same order : FALSE
+  Challenger vs its own aligned target : AUC 0.7847
+
+The two holdout sets contained the SAME APPLICANTS in
+DIFFERENT ROW ORDER:
+  - y_holdout came from train_test_split on the preprocessed
+    frame, retaining the original DataFrame index order
+  - yc_hold came from a boolean .isin() mask on the challenger
+    frame, returning rows in that frame's own order
+
+So p_challenger[i] and y_holdout[i] referred to different
+applicants, collapsing AUC to chance.
+
+--- FIX ---
+Align predictions by SK_ID_CURR via an explicit merge rather
+than trusting positional order:
+
+  sc_pred = DataFrame({SK_ID_CURR, p_scorecard, TARGET})
+  ch_pred = DataFrame({SK_ID_CURR, p_challenger})
+  comparison = sc_pred.merge(ch_pred, on="SK_ID_CURR")
+
+--- LESSON ---
+Positional alignment between separately-constructed DataFrames
+is a silent failure mode — no exception is raised, only
+meaningless output. The diagnostic tell was the value itself:
+AUC of EXACTLY 0.4987 indicates random pairing, not weak
+signal. Had it returned 0.62 the cause could have been
+mistaken for feature drift or overfitting and cost hours.
+
+Always merge on a key when combining predictions from
+separately-built datasets.
+
+================================================================
+7. FINAL HOLDOUT RESULTS (n = 61,503, never seen in training)
+================================================================
+
+  Model                    AUC     Gini    Brier    LogLoss
+  -----------------------  ------  ------  -------  -------
+  Scorecard  (24 feat)     0.7424  0.4848  0.06905  0.2512
+  Challenger (247 feat)    0.7847  0.5694  0.06626  0.2382
+  -----------------------  ------  ------  -------  -------
+  Gap                      0.0423  0.0846
+
+--- CV vs HOLDOUT CONSISTENCY ---
+  Scorecard   CV 0.7467  ->  holdout 0.7424   (-0.0043)
+  Challenger  CV 0.7881  ->  holdout 0.7847   (-0.0034)
+
+Both dropped ~0.004 — small and expected. This validates the
+fold-wise WoE refitting decision: reusing pre-computed WoE for
+CV would have produced an inflated CV figure and a much larger
+holdout drop.
+
+--- THE INTERPRETABILITY COST: 8.5 GINI POINTS ---
+This is the commercially meaningful number. The scorecard
+surrenders 0.0846 Gini in exchange for:
+  - 24 explainable features instead of 247
+  - monotonic bins with documented cut-points
+  - every coefficient significant and correctly signed
+  - a points-per-bin table (Phase 8) that supports
+    adverse-action reasoning and regulatory review
+
+Whether that trade is worth making is a business decision.
+Being able to QUANTIFY it rather than assert it is the
+contribution of the dual-track design.
+
+--- CALIBRATION ---
+Both models are well calibrated against a base rate of 0.0807:
+  Naive (predict base rate for all)  Brier 0.0742
+  Scorecard                          Brier 0.06905
+  Challenger                         Brier 0.06626
+  is_unbalance config (rejected)     Brier 0.1656
+
+Both beat the naive benchmark. The rejected reweighted config
+would have been more than twice as bad as predicting nothing.
+The unweighted decision is empirically vindicated.
+
+================================================================
+8. EXTERNAL BENCHMARK CONTEXT (Kaggle, 2018)
+================================================================
+The Home Credit Default Risk competition drew 7,198 teams.
+
+  Score   Context
+  ------  ------------------------------------------
+  0.806   Winning team (large stacked ensemble)
+  0.800+  Only 43 teams (top 0.6%)
+  0.8044  Best single LightGBM, 32nd place
+  0.795   Top 9% (644th of 7,198)
+  0.785   THIS PROJECT — challenger, single tuned model
+  0.752   Public tutorial with manual feature engineering
+  0.742   THIS PROJECT — 24-feature scorecard
+
+The challenger at 0.785 is competitive as a SINGLE UNTUNED-
+ARCHITECTURE model. Winning solutions were ensembles of dozens
+of models, some using GRU networks on the time-series tables to
+generate additional features. The 0.785 -> 0.806 gap represents
+very substantial ensembling effort for 2 AUC points.
+
+However the objective here is NOT leaderboard position. A
+50-model stacked ensemble cannot be validated, explained to a
+regulator, or used to generate adverse-action reasons. The
+24-feature scorecard with a documented, auditable development
+trail is the artefact that demonstrates credit-risk capability.
+
+Also relevant: many competitors overfit the PUBLIC leaderboard
+rather than trusting cross-validation, and dropped sharply on
+the private set. The CV-plus-holdout discipline used here is
+the defence against exactly that failure.
+
+================================================================
+9. ARTEFACTS PRODUCED
+================================================================
+  holdout_split.pkl             dev_ids / holdout_ids
+  scorecard_binning.pkl         fitted BinningProcess (24 feat)
+  scorecard_model.pkl           sklearn LogisticRegression
+  scorecard_features_final.pkl  the 24 feature names
+  scorecard_logit_sm.pkl        statsmodels Logit (coefficients,
+                                std errors, p-values for Phase 8)
+  challenger_model.pkl          tuned LightGBM (1452 iterations)
+  challenger_params.pkl         Optuna best parameters
+  holdout_predictions.parquet   SK_ID_CURR, TARGET,
+                                p_scorecard, p_challenger
+
+================================================================
+10. FINAL SCORECARD FEATURE SET (24)
+================================================================
+Dropped from Phase 5's 27: EXT_SOURCE_1, NONLIVINGAREA_AVG,
+EXT_2_3_STD.
+
+External credit scores (2)
+  EXT_1_2_3_MIN
+  EXT_1_3_MEAN
+
+Demographics & stability (5)
+  YEARS_BIRTH
+  YEARS_EMPLOYED
+  OCCUPATION_TYPE
+  REGION_RATING_CLIENT_W_CITY
+  REG_CITY_NOT_WORK_CITY
+  POSITIVE_DAYS_LAST_PHONE_CHANGE
+
+Loan characteristics (4)
+  AMT_GOODS_PRICE
+  CREDIT_TO_GOODS
+  ANNUITY_TO_CREDIT
+  MEAN_CREDIT_TO_APP_RATIO
+
+Bureau / external credit history (3)
+  DAYS_SINCE_FIRST_CREDIT
+  DEBT_TO_CREDIT_RATIO
+  MEAN_AMT_CREDIT_SUM
+
+Prior application behaviour (1)
+  REFUSAL_RATE
+
+Instalment payment behaviour (3)
+  INST_MEAN_PAYMENT_RATIO
+  INST_COUNT_LATE_LAST_12M
+  INST_MEAN_AMT_INSTALMENT
+
+Credit card behaviour (2)
+  CC_MEAN_UTILISATION
+  CC_FLAG_EVER_OVER_LIMIT
+
+Property / housing (3)
+  FLOORSMAX_AVG
+  ENTRANCES_AVG
+  YEARS_BEGINEXPLUATATION_MEDI
+
+Every major risk dimension from the Phase 2 EDA remains
+represented: external scores, demographic stability,
+affordability, external credit history, prior application
+outcomes, actual payment behaviour, revolving utilisation and
+property characteristics.
+
+================================================================
+11. OPEN ITEMS FOR PHASE 7
+================================================================
+1. DECISION THRESHOLD. Class imbalance was deliberately not
+   handled during training. Phase 7 must select an operating
+   threshold — via KS statistic, cost-based optimisation, or a
+   target approval rate.
+
+2. KS STATISTIC AND SCORE BANDS. AUC/Gini measure global
+   separation. Credit risk also requires KS (maximum separation
+   between cumulative good and bad distributions) and bad rate
+   by score decile to confirm monotonic risk ranking across
+   the score range.
+
+3. CALIBRATION CURVES. Brier scores are good in aggregate, but
+   reliability plots are needed to confirm calibration holds
+   across the full PD range, not merely on average.
+
+4. CC_FLAG_EVER_OVER_LIMIT. Flagged in Phase 5 for zero
+   LightGBM gain (redundant with CC_MEAN_UTILISATION). It
+   survived the scorecard pruning with a significant, correctly
+   signed coefficient, so it was retained. Monitor its
+   stability in Phase 7 score-band analysis.
+
+5. POPULATION STABILITY (PSI). Compare score distributions
+   between development and holdout to establish the baseline
+   monitoring metric for production.
+
+================================================================
+END OF PHASE 6 FINDINGS
+================================================================
