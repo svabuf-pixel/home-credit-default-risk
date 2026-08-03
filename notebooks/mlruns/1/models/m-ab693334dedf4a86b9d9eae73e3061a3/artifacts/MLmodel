@@ -1,0 +1,23 @@
+artifact_path: /Users/feliciu/home-credit-default-risk/notebooks/mlruns/1/models/m-ab693334dedf4a86b9d9eae73e3061a3/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.skops
+    predict_fn: predict
+    python_version: 3.11.15
+  sklearn:
+    code: null
+    pickled_model: model.skops
+    serialization_format: skops
+    sklearn_version: 1.9.0
+    skops_trusted_types: null
+mlflow_version: 3.14.0
+model_id: m-ab693334dedf4a86b9d9eae73e3061a3
+model_size_bytes: 15755
+model_uuid: m-ab693334dedf4a86b9d9eae73e3061a3
+prompts: null
+run_id: b1a36a89fbc94c8ea975bf0480afc230
+utc_time_created: '2026-08-03 10:12:13.935047'

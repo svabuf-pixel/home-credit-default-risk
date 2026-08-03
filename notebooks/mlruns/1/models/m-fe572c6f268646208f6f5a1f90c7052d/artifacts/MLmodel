@@ -1,0 +1,27 @@
+artifact_path: /Users/feliciu/home-credit-default-risk/notebooks/mlruns/1/models/m-fe572c6f268646208f6f5a1f90c7052d/artifacts
+flavors:
+  lightgbm:
+    code: null
+    data: model.skops
+    lgb_version: 4.6.0
+    model_class: lightgbm.sklearn.LGBMClassifier
+    serialization_format: skops
+    skops_trusted_types:
+    - lightgbm.sklearn.LGBMRegressor
+    - collections.OrderedDict
+    - lightgbm.sklearn.LGBMClassifier
+    - lightgbm.basic.Booster
+  python_function:
+    data: model.skops
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.lightgbm
+    python_version: 3.11.15
+mlflow_version: 3.14.0
+model_id: m-fe572c6f268646208f6f5a1f90c7052d
+model_size_bytes: 3544828
+model_uuid: m-fe572c6f268646208f6f5a1f90c7052d
+prompts: null
+run_id: 24172bf234134e23bdf69d8df5875881
+utc_time_created: '2026-08-03 10:12:31.507851'
